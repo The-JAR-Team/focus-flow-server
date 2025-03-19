@@ -1,33 +1,33 @@
 from flask import Flask, request, jsonify
 
-app = Flask(__name__)
+from db.db_api import *
+from server.proxies.db_proxy import proxy_logins_api
 
-# Dummy user data for demonstration
-dummy_user = {
-    "username": "admin",
-    "password": "password123"
-}
+app = Flask(__name__)
+mode = "norm"
 
 
 @app.route('/login', methods=['POST'])
 def login():
-    # Parse JSON payload from the request
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Missing JSON payload"}), 400
+    data = request.get_json()  # Expects JSON payload with "email" and "password"
+    response, status = proxy_logins_api(login_user, data, mode)
+    return jsonify(response), status
 
-    username = data.get("username")
-    password = data.get("password")
 
-    # Validate that both username and password were provided
-    if not username or not password:
-        return jsonify({"error": "Missing username or password"}), 400
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()  # Expects JSON payload with registration fields.
+    response, status = proxy_logins_api(register_user, data, mode)
+    return jsonify(response), status
 
-    # Check credentials against the dummy user data
-    if username == dummy_user["username"] and password == dummy_user["password"]:
-        return jsonify({"message": "Login successful"}), 200
-    else:
-        return jsonify({"error": "Invalid credentials"}), 401
+
+@app.route('/validate_token', methods=['POST'])
+def validate_token():
+    data = request.get_json()  # Expects JSON payload with "auth_token"
+    token = data.get("auth_token")
+    # Call the validate_auth_token API function; note that it expects a token, not a dict.
+    response, status = proxy_logins_api(validate_auth_token, token, mode)
+    return jsonify(response), status
 
 
 if __name__ == '__main__':
