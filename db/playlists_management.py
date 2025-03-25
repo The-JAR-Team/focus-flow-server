@@ -1,4 +1,4 @@
-from db import DB
+from db.DB import DB
 
 
 def create_playlist(user_id, playlist_name):
@@ -16,29 +16,24 @@ def create_playlist(user_id, playlist_name):
         On failure: {"status": "failed", "reason": "<explanation>"}
     """
     try:
-        conn = DB.get_connection()
-        cur = conn.cursor()
+        with DB.get_cursor() as cur:
+            # Check if a playlist with the given name already exists for this user.
+            cur.execute(
+                'SELECT playlist_id FROM "Playlist" WHERE user_id = %s AND playlist_name = %s',
+                (user_id, playlist_name)
+            )
+            if cur.fetchone():
+                return {"status": "failed", "reason": "Playlist with that name already exists"}, 400
 
-        # Check if a playlist with the given name already exists for this user.
-        cur.execute(
-            'SELECT playlist_id FROM "Playlist" WHERE user_id = %s AND playlist_name = %s',
-            (user_id, playlist_name)
-        )
-        if cur.fetchone():
-            return {"status": "failed", "reason": "Playlist with that name already exists"}, 400
-
-        # Insert the new playlist. Permission will default to 'unlisted'.
-        cur.execute(
-            'INSERT INTO "Playlist" (user_id, playlist_name) VALUES (%s, %s) RETURNING playlist_id',
-            (user_id, playlist_name)
-        )
-        new_playlist_id = cur.fetchone()[0]
-        conn.commit()
-
-        return {"status": "success", "playlist_id": new_playlist_id}, 200
+            # Insert the new playlist; permission defaults to 'unlisted'.
+            cur.execute(
+                'INSERT INTO "Playlist" (user_id, playlist_name) VALUES (%s, %s) RETURNING playlist_id',
+                (user_id, playlist_name)
+            )
+            new_playlist_id = cur.fetchone()[0]
+            return {"status": "success", "playlist_id": new_playlist_id}, 200
     except Exception as e:
         print(e)
-        conn.rollback()
         return {"status": "failed", "reason": "failed to create playlist"}, 500
 
 
@@ -52,32 +47,27 @@ def delete_playlist(user_id, playlist_id):
 
     Returns:
       tuple: (response_dict, http_status_code)
-        On success: {"status": "success", "reason": "playlist deleted"}
+        On success: {"status": "success", "reason": "Playlist deleted"}
         On failure: {"status": "failed", "reason": "<explanation>"}
     """
     try:
-        conn = DB.get_connection()
-        cur = conn.cursor()
+        with DB.get_cursor() as cur:
+            # Ensure the playlist exists and belongs to the user.
+            cur.execute(
+                'SELECT playlist_id FROM "Playlist" WHERE playlist_id = %s AND user_id = %s',
+                (playlist_id, user_id)
+            )
+            if cur.fetchone() is None:
+                return {"status": "failed", "reason": "Playlist not found or access denied"}, 404
 
-        # Ensure the playlist exists and belongs to the user.
-        cur.execute(
-            'SELECT playlist_id FROM "Playlist" WHERE playlist_id = %s AND user_id = %s',
-            (playlist_id, user_id)
-        )
-        if cur.fetchone() is None:
-            return {"status": "failed", "reason": "Playlist not found or access denied"}, 404
-
-        # Delete the playlist.
-        cur.execute(
-            'DELETE FROM "Playlist" WHERE playlist_id = %s AND user_id = %s',
-            (playlist_id, user_id)
-        )
-        conn.commit()
-
-        return {"status": "success", "reason": "Playlist deleted"}, 200
+            # Delete the playlist.
+            cur.execute(
+                'DELETE FROM "Playlist" WHERE playlist_id = %s AND user_id = %s',
+                (playlist_id, user_id)
+            )
+            return {"status": "success", "reason": "Playlist deleted"}, 200
     except Exception as e:
         print(e)
-        conn.rollback()
         return {"status": "failed", "reason": "failed to delete playlist"}, 500
 
 
@@ -94,20 +84,17 @@ def get_all_user_playlists(user_id):
         On failure: {"status": "failed", "reason": "<explanation>"}
     """
     try:
-        conn = DB.get_connection()
-        cur = conn.cursor()
-
-        cur.execute(
-            'SELECT playlist_id, playlist_name, permission FROM "Playlist" WHERE user_id = %s ORDER BY playlist_id',
-            (user_id,)
-        )
-        rows = cur.fetchall()
-        playlists = [
-            {"playlist_id": row[0], "playlist_name": row[1], "permission": row[2]}
-            for row in rows
-        ]
-
-        return {"status": "success", "playlists": playlists}, 200
+        with DB.get_cursor() as cur:
+            cur.execute(
+                'SELECT playlist_id, playlist_name, permission FROM "Playlist" WHERE user_id = %s ORDER BY playlist_id',
+                (user_id,)
+            )
+            rows = cur.fetchall()
+            playlists = [
+                {"playlist_id": row[0], "playlist_name": row[1], "permission": row[2]}
+                for row in rows
+            ]
+            return {"status": "success", "playlists": playlists}, 200
     except Exception as e:
         print(e)
         return {"status": "failed", "reason": "failed to fetch playlists"}, 500
@@ -128,26 +115,21 @@ def update_playlist_permission(user_id, playlist_id, new_permission):
         On failure: {"status": "failed", "reason": "<explanation>"}
     """
     try:
-        conn = DB.get_connection()
-        cur = conn.cursor()
+        with DB.get_cursor() as cur:
+            # Ensure the playlist belongs to the user.
+            cur.execute(
+                'SELECT playlist_id FROM "Playlist" WHERE playlist_id = %s AND user_id = %s',
+                (playlist_id, user_id)
+            )
+            if cur.fetchone() is None:
+                return {"status": "failed", "reason": "Playlist not found or access denied"}, 404
 
-        # Ensure the playlist belongs to the user.
-        cur.execute(
-            'SELECT playlist_id FROM "Playlist" WHERE playlist_id = %s AND user_id = %s',
-            (playlist_id, user_id)
-        )
-        if cur.fetchone() is None:
-            return {"status": "failed", "reason": "Playlist not found or access denied"}, 404
-
-        # Update the permission.
-        cur.execute(
-            'UPDATE "Playlist" SET permission = %s WHERE playlist_id = %s AND user_id = %s',
-            (new_permission, playlist_id, user_id)
-        )
-        conn.commit()
-        return {"status": "success", "reason": "Permission updated"}, 200
-
+            # Update the permission.
+            cur.execute(
+                'UPDATE "Playlist" SET permission = %s WHERE playlist_id = %s AND user_id = %s',
+                (new_permission, playlist_id, user_id)
+            )
+            return {"status": "success", "reason": "Permission updated"}, 200
     except Exception as e:
         print(e)
-        conn.rollback()
         return {"status": "failed", "reason": "failed to update permission"}, 500
