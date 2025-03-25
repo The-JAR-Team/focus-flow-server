@@ -1,11 +1,11 @@
 from flask import Flask, request, jsonify
-
+from flask_cors import CORS
 from db.db_api import *
 from server.proxies.db_proxy import proxy_logins_api
 
 app = Flask(__name__)
 mode = "norm"
-
+CORS(app)
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -31,4 +31,4 @@ def validate_token():
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5000)
