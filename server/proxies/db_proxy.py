@@ -24,10 +24,10 @@ def proxy_logins_api(api_function, payload, mode="norm"):
             # API call failed.
             if mode.lower() == "ignore":
                 dummy_response = {"status": "success", "reason": "", "auth_token": 123456}
-                return dummy_response, 200
+                return dummy_response, status
             else:
                 # Return an error; using 400 as per your specification.
-                return {"status": "failed", "reason": response.get("reason", "API call failed"), "auth_token": 0}, 400
+                return {"status": "failed", "reason": response.get("reason", "API call failed"), "auth_token": 0}, status
     except Exception as e:
         # In case of an exception during the API call.
         if mode.lower() == "ignore":
