@@ -162,7 +162,6 @@ def get_user_info(user_id):
              "first_name": <str or null>,
              "last_name": <str or null>,
              "email": <str or null>,
-             "password": <str or null>,
              "age": <int or null>,
              "auth_token": <int or null>,
              "auth_last_used": <str in ISO format or null>
@@ -174,7 +173,7 @@ def get_user_info(user_id):
     try:
         with DB.get_cursor() as cur:
             cur.execute(
-                'SELECT user_id, first_name, last_name, email, password, age, auth_token, auth_last_used FROM "User" WHERE user_id = %s',
+                'SELECT user_id, first_name, last_name, email, age FROM "User" WHERE user_id = %s',
                 (user_id,)
             )
             row = cur.fetchone()
@@ -186,10 +185,7 @@ def get_user_info(user_id):
                 "first_name": row[1],
                 "last_name": row[2],
                 "email": row[3],
-                "password": row[4],
-                "age": row[5],
-                "auth_token": row[6],
-                "auth_last_used": row[7].isoformat() if row[7] is not None else None
+                "age": row[4],
             }
             return {"status": "success", "user": user_info}, 200
 
