@@ -50,13 +50,19 @@ def register():
 
 @auth_bp.route('/validate_session', methods=['GET'])
 def validate_session_endpoint():
-    # Read the session_id from the cookie instead of expecting it in JSON payload.
-    session_id = request.cookies.get('session_id')
-    if not session_id:
-        return jsonify({"status": "failed", "reason": "No session cookie provided", "session_id": 0}), 401
+    """
+    GET /validate_session
 
-    response, status, _ = proxy_logins_api(validate_session, session_id, mode)
-    return jsonify(response), status
+    Uses the get_authenticated_user helper to verify the session by reading the session_id cookie.
+    If authentication fails, returns an error response (and clears the cookie).
+    If successful, returns a success response with the session_id.
+    """
+    resp, user_id, status = get_authenticated_user()
+    if resp is not None:
+        return resp, status
+    # If authentication succeeded, return a success message
+    return jsonify({"status": "success", "reason": ""}), 200
+
 
 
 @auth_bp.route('/user_info', methods=['GET'])
@@ -86,3 +92,26 @@ def user_info():
 
     response, code = get_user_info(user_id)
     return jsonify(response), code
+
+
+@auth_bp.route('/logout', methods=['POST'])
+def logout():
+    """
+    POST /logout
+
+    Logs out the current session by removing it from the DB
+    and clearing the session_id cookie on the client side.
+    """
+    # Get the session_id from the cookie
+    session_id = request.cookies.get('session_id')
+    if not session_id:
+        return jsonify({"status": "failed", "reason": "No session cookie provided"}), 401
+
+    # Call the DB function to remove the session
+    response_dict, status_code = logout_user(session_id)
+
+    # Build a response
+    resp = jsonify(response_dict)
+    # To fully clear the cookie from the client, set an empty value and/or expiration in the past
+    resp.set_cookie("session_id", "", expires=0, httponly=True, secure=True, samesite='none')
+    return resp, status_code

@@ -89,58 +89,55 @@ def register_user(data):
         return {"status": "failed", "reason": "failed registration"}, 401, 0
 
 
-def validate_session(session_id):
+def _validate_and_extend_session(session_id):
     """
-    Validates the provided session id.
-    A session is considered valid if its expires_at is in the future.
-    If valid, updates the expiration to extend the session by 1 day.
-    Returns a 3-tuple:
-      ( response_dict, http_status_code, session_id (str) or 0 )
+    Common helper: Checks if the session exists and is not expired.
+    If valid, extends its expiration and returns (user_id, 200).
+    On failure, returns (None, status_code).
     """
     try:
         with DB.get_cursor() as cur:
             cur.execute('SELECT user_id, expires_at FROM "Sessions" WHERE session_id = %s', (session_id,))
             result = cur.fetchone()
             if result is None:
-                return {"status": "failed", "reason": "invalid session"}, 401, 0
-
+                return None, 401
             user_id, expires_at = result
             now = datetime.now()
             if now > expires_at:
-                return {"status": "failed", "reason": "session expired"}, 401, 0
-
-            new_expires_at = now + timedelta(days=1)
-            cur.execute('UPDATE "Sessions" SET expires_at = %s WHERE session_id = %s', (new_expires_at, session_id))
-            return {"status": "success", "reason": ""}, 200, session_id
-    except Exception as e:
-        print(e)
-        return {"status": "failed", "reason": "failed session validation"}, 401, 0
-
-
-def get_user(session_id):
-    """
-    Retrieves the user_id associated with the given session_id.
-    If the session is valid (not expired), updates its expiration (extended by 1 day)
-    and returns the user_id.
-    Returns:
-      (user_id (int), status_code (int))
-    """
-    try:
-        with DB.get_cursor() as cur:
-            cur.execute('SELECT user_id, expires_at FROM "Sessions" WHERE session_id = %s', (session_id,))
-            result = cur.fetchone()
-            if result is None:
-                return 0, 401
-            user_id, expires_at = result
-            now = datetime.now()
-            if now > expires_at:
-                return 0, 401
+                return None, 401
             new_expires_at = now + timedelta(days=1)
             cur.execute('UPDATE "Sessions" SET expires_at = %s WHERE session_id = %s', (new_expires_at, session_id))
             return user_id, 200
     except Exception as e:
         print(e)
-        return 0, 500
+        return None, 500
+
+
+def get_user(session_id):
+    """
+    Retrieves the user_id associated with the given session_id.
+    Uses _validate_and_extend_session to do the work.
+
+    Returns:
+      (user_id (int), status_code (int))
+      If session is invalid, returns (0, error_code).
+    """
+    user_id, code = _validate_and_extend_session(session_id)
+    return (user_id if user_id is not None else 0), code
+
+
+def validate_session(session_id):
+    """
+    Validates the provided session id.
+    Uses _validate_and_extend_session to check if the session is valid and extends its expiration.
+
+    Returns a 3-tuple:
+      (response_dict, http_status_code, session_id (str) or 0)
+    """
+    user_id, code = _validate_and_extend_session(session_id)
+    if user_id is None:
+        return {"status": "failed", "reason": "invalid or expired session"}, code, 0
+    return {"status": "success", "reason": ""}, code, session_id
 
 
 def get_user_info(user_id):
@@ -192,3 +189,21 @@ def get_user_info(user_id):
     except Exception as e:
         print("Error in get_user_info:", e)
         return {"status": "failed", "reason": "Error retrieving user info"}, 500
+
+
+def logout_user(session_id):
+    """
+    Invalidates the session by removing it from the Sessions table.
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    try:
+        with DB.get_cursor() as cur:
+            # Delete the session row if it exists.
+            cur.execute('DELETE FROM "Sessions" WHERE session_id = %s', (session_id,))
+            if cur.rowcount == 0:
+                # No row was deleted -> session didn't exist
+                return {"status": "failed", "reason": "Session not found"}, 404
+            return {"status": "success", "reason": "Logged out successfully"}, 200
+    except Exception as e:
+        print(f"Error logging out: {e}")
+        return {"status": "failed", "reason": "Logout failed"}, 500
