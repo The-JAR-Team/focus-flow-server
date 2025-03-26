@@ -21,17 +21,17 @@ def login_user(data):
             email = data.get("email")
             password = data.get("password")
             if not email or not password:
-                return {"status": "failed", "reason": "missing email or password"}, 401, 0, 0
+                return {"status": "failed", "reason": "missing email or password"}, 401, 0
 
             cur.execute('SELECT user_id, password FROM "User" WHERE email = %s', (email,))
             result = cur.fetchone()
             if result is None:
-                return {"status": "failed", "reason": "no such user is signed in"}, 401, 0, 0
+                return {"status": "failed", "reason": "no such user is signed in"}, 401, 0
             user_id, stored_password = result
 
             # Verify password using bcrypt.
             if not bcrypt.checkpw(password.encode('utf-8'), stored_password.encode('utf-8')):
-                return {"status": "failed", "reason": "incorrect password"}, 401, 0, 0
+                return {"status": "failed", "reason": "incorrect password"}, 401, 0
 
             session_id = str(uuid.uuid4())
             expires_at = datetime.now() + timedelta(days=1)
@@ -42,7 +42,7 @@ def login_user(data):
             return {"status": "success", "reason": ""}, 200, session_id
     except Exception as e:
         print(e)
-        return {"status": "failed", "reason": "failed login"}, 401, 0, 0
+        return {"status": "failed", "reason": "failed login"}, 401, 0
 
 
 def register_user(data):
