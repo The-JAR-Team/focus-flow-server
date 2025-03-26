@@ -1,21 +1,9 @@
 # playlist.py
 from flask import Blueprint, request, jsonify
 from db.db_api import *
+from server.main.utils import get_authenticated_user
 
 playlist_bp = Blueprint('playlist', __name__)
-
-
-def get_authenticated_user():
-    """
-    Reads the session_id cookie, validates the session,
-    and returns the associated user_id.
-    Returns (user_id, status_code) tuple.
-    """
-    session_id = request.cookies.get('session_id')
-    if not session_id:
-        return 0, 401  # No session cookie provided.
-    user_id, status = get_user(session_id)
-    return user_id, status
 
 
 @playlist_bp.route('/playlists', methods=['POST'])
@@ -69,3 +57,14 @@ def update_permission(playlist_id):
 
     response, status = update_playlist_permission(user_id, playlist_id, new_permission)
     return jsonify(response), status
+
+@playlist_bp.route('/playlists/update_name', methods=['PUT'])
+def update_name():
+    user_id, status = get_authenticated_user()
+    if status != 200:
+        return jsonify({"status": "failed", "reason": "unauthenticated"}), 401
+
+    data = request.get_json()
+    # update_playlist_name expects the user_id and a JSON payload containing "old_name" and "new_name".
+    response, code = update_playlist_name(user_id, data)
+    return jsonify(response), code

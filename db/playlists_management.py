@@ -135,7 +135,6 @@ def update_playlist_permission(user_id, playlist_id, new_permission):
         return {"status": "failed", "reason": "failed to update permission"}, 500
 
 
-
 def remove_from_playlist(user_id, data):
     """
     Removes a playlist item.
@@ -187,3 +186,56 @@ def remove_from_playlist(user_id, data):
     except Exception as e:
         conn.rollback()
         return ({"status": "failed", "reason": str(e)}, 400)
+
+
+def update_playlist_name(user_id, data):
+    """
+    Updates the name of a user's playlist.
+
+    Expects a JSON payload like:
+    {
+      "old_name": "Old Playlist Name",
+      "new_name": "New Playlist Name"
+    }
+
+    The function searches for a playlist owned by the given user with the specified old name.
+    If found, it updates the playlist_name to the new name.
+
+    Returns:
+      tuple: (response_dict, http_status_code)
+    """
+    try:
+        conn = DB.get_connection()
+        cur = conn.cursor()
+
+        old_name = data.get("old_name")
+        new_name = data.get("new_name")
+
+        if not old_name or not new_name:
+            return ({"status": "failed", "reason": "Missing old_name or new_name"}, 400)
+
+        # Search for the playlist with the given old name for this user.
+        cur.execute("""
+            SELECT playlist_id FROM "Playlist"
+            WHERE playlist_name = %s AND user_id = %s
+            LIMIT 1
+        """, (old_name, user_id))
+        result = cur.fetchone()
+        if result is None:
+            return ({"status": "failed", "reason": "Playlist with the given old_name not found"}, 404)
+
+        playlist_id = result[0]
+
+        # Update the playlist name.
+        cur.execute("""
+            UPDATE "Playlist"
+            SET playlist_name = %s
+            WHERE playlist_id = %s
+        """, (new_name, playlist_id))
+
+        conn.commit()
+        return ({"status": "success", "reason": "Playlist name updated", "playlist_id": playlist_id}, 200)
+
+    except Exception as e:
+        conn.rollback()
+        return ({"status": "failed", "reason": str(e)}, 500)
