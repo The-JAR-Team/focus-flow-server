@@ -65,7 +65,6 @@ def validate_session_endpoint():
     return jsonify({"status": "success", "reason": ""}), 200
 
 
-
 @auth_bp.route('/user_info', methods=['GET'])
 def user_info():
     """
@@ -80,16 +79,15 @@ def user_info():
          "first_name": <str or null>,
          "last_name": <str or null>,
          "email": <str or null>,
-         "password": <str or null>,
          "age": <int or null>,
          "auth_token": <int or null>,
          "auth_last_used": <ISO formatted timestamp or null>
       }
     }
     """
-    user_id, status = get_authenticated_user()
-    if status != 200:
-        return jsonify({"status": "failed", "reason": "unauthenticated"}), 401
+    resp, user_id, status = get_authenticated_user()
+    if resp is not None:
+        return resp, status
 
     response, code = get_user_info(user_id)
     return jsonify(response), code
