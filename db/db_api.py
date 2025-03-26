@@ -301,3 +301,7 @@ def store_questions_in_db(youtube_id, language, questions):
 
 def questions_ready(youtube_id, language="Hebrew"):
     return question_management.questions_ready(youtube_id)
+
+
+def get_user_info(user_id):
+    return user_management.get_user_info(user_id)

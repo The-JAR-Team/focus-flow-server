@@ -141,3 +141,54 @@ def get_user(session_id):
     except Exception as e:
         print(e)
         return 0, 500
+
+
+def get_user_info(user_id):
+    """
+    Retrieves all user information for the given user_id from the User table.
+
+    Returns:
+      tuple: (response_dict, http_status_code)
+
+      On success:
+        {
+          "status": "success",
+          "user": {
+             "user_id": <int>,
+             "first_name": <str or null>,
+             "last_name": <str or null>,
+             "email": <str or null>,
+             "password": <str or null>,
+             "age": <int or null>,
+             "auth_token": <int or null>,
+             "auth_last_used": <str in ISO format or null>
+          }
+        }
+      On failure:
+        { "status": "failed", "reason": <error message> }
+    """
+    try:
+        with DB.get_cursor() as cur:
+            cur.execute(
+                'SELECT user_id, first_name, last_name, email, password, age, auth_token, auth_last_used FROM "User" WHERE user_id = %s',
+                (user_id,)
+            )
+            row = cur.fetchone()
+            if row is None:
+                return {"status": "failed", "reason": "User not found"}, 404
+
+            user_info = {
+                "user_id": row[0],
+                "first_name": row[1],
+                "last_name": row[2],
+                "email": row[3],
+                "password": row[4],
+                "age": row[5],
+                "auth_token": row[6],
+                "auth_last_used": row[7].isoformat() if row[7] is not None else None
+            }
+            return {"status": "success", "user": user_info}, 200
+
+    except Exception as e:
+        print("Error in get_user_info:", e)
+        return {"status": "failed", "reason": "Error retrieving user info"}, 500
