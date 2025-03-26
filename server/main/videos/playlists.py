@@ -26,11 +26,13 @@ def create():
         return jsonify({"status": "failed", "reason": "unauthenticated"}), 401
 
     data = request.get_json()
-    playlist_name = data.get("playlist_name")
+    playlist_name = data.get("playlist_name", "general")
+    playlist_permission = data.get("playlist_permission", "unlisted")
+
     if not playlist_name:
         return jsonify({"status": "failed", "reason": "missing playlist_name"}), 400
 
-    response, status = create_playlist(user_id, playlist_name)
+    response, status = create_playlist(user_id, playlist_name, playlist_permission)
     return jsonify(response), status
 
 

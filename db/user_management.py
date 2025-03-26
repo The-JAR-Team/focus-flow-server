@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timedelta
 from db.DB import DB
 
+
 def login_user(data):
     """
     Login function:

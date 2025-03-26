@@ -1,7 +1,7 @@
 from db.DB import DB
 
 
-def create_playlist(user_id, playlist_name):
+def create_playlist(user_id, playlist_name, playlist_permission='unlisted'):
     """
     Creates a new playlist for the given user if one with the same name doesn't already exist.
     The playlist will have a default permission of 'unlisted'.
@@ -27,8 +27,8 @@ def create_playlist(user_id, playlist_name):
 
             # Insert the new playlist; permission defaults to 'unlisted'.
             cur.execute(
-                'INSERT INTO "Playlist" (user_id, playlist_name) VALUES (%s, %s) RETURNING playlist_id',
-                (user_id, playlist_name)
+                'INSERT INTO "Playlist" (user_id, playlist_name, permission) VALUES (%s, %s, %s) RETURNING playlist_id',
+                (user_id, playlist_name, playlist_permission)
             )
             new_playlist_id = cur.fetchone()[0]
             return {"status": "success", "playlist_id": new_playlist_id}, 200
@@ -58,7 +58,7 @@ def delete_playlist(user_id, playlist_id):
                 (playlist_id, user_id)
             )
             if cur.fetchone() is None:
-                return {"status": "failed", "reason": "Playlist not found or access denied"}, 404
+                return {"status": "failed", "reason": "Playlist not found"}, 404
 
             # Delete the playlist.
             cur.execute(
@@ -122,7 +122,7 @@ def update_playlist_permission(user_id, playlist_id, new_permission):
                 (playlist_id, user_id)
             )
             if cur.fetchone() is None:
-                return {"status": "failed", "reason": "Playlist not found or access denied"}, 404
+                return {"status": "failed", "reason": "Playlist not found or not owned by user"}, 404
 
             # Update the permission.
             cur.execute(
@@ -133,3 +133,57 @@ def update_playlist_permission(user_id, playlist_id, new_permission):
     except Exception as e:
         print(e)
         return {"status": "failed", "reason": "failed to update permission"}, 500
+
+
+
+def remove_from_playlist(user_id, data):
+    """
+    Removes a playlist item.
+
+    Expects:
+      user_id (int): The ID of the user making the request.
+      data (dict): JSON payload containing:
+          {
+             "playlist_item_id": <int>
+          }
+
+    Process:
+      1. Verify that the playlist item exists and that the playlist it belongs to is owned by user_id.
+      2. Delete the playlist item.
+
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    try:
+        conn = DB.get_connection()
+        cur = conn.cursor()
+
+        playlist_item_id = data.get("playlist_item_id")
+        if not playlist_item_id:
+            return ({"status": "failed", "reason": "missing playlist_item_id"}, 400)
+
+        # Verify the playlist item belongs to a playlist owned by the user.
+        cur.execute("""
+            SELECT p.user_id
+            FROM "Playlist_Item" pi
+            JOIN "Playlist" p ON pi.playlist_id = p.playlist_id
+            WHERE pi.playlist_item_id = %s
+        """, (playlist_item_id,))
+        result = cur.fetchone()
+        if result is None:
+            return ({"status": "failed", "reason": "playlist item not found"}, 400)
+
+        owner_user_id = result[0]
+        if owner_user_id != user_id:
+            return ({"status": "failed", "reason": "not authorized to remove this playlist item"}, 400)
+
+        # Delete the playlist item.
+        cur.execute("""
+            DELETE FROM "Playlist_Item"
+            WHERE playlist_item_id = %s
+        """, (playlist_item_id,))
+        conn.commit()
+
+        return ({"status": "success", "reason": "", "removed_playlist_item_id": playlist_item_id}, 200)
+    except Exception as e:
+        conn.rollback()
+        return ({"status": "failed", "reason": str(e)}, 400)

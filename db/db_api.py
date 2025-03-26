@@ -12,8 +12,8 @@ def validate_session(session_id):
 def get_user(session_id):
     return user_management.get_user(session_id)
 
-def create_playlist(user_id, playlist_name):
-    return playlists_management.create_playlist(user_id, playlist_name)
+def create_playlist(user_id, playlist_name, playlist_permission):
+    return playlists_management.create_playlist(user_id, playlist_name, playlist_permission)
 
 def delete_playlist(user_id, playlist_id):
     return playlists_management.delete_playlist(user_id, playlist_id)
