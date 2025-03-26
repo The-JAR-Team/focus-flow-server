@@ -65,6 +65,7 @@ def get_accessible_videos_api():
     response_data = get_all_videos_user_can_access(user_id)
     return jsonify(response_data), 200 if response_data.get("status") == "success" else 400
 
+
 @videos_bp.route('/videos/<string:youtube_id>/questions', methods=['GET'])
 def get_video_questions(youtube_id):
     """

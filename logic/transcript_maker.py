@@ -1,8 +1,11 @@
 import json
 import math
+import os
 import threading
 
+from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import GenericProxyConfig
 from db.db_api import store_questions_in_db, questions_ready
 from logic.gemini_api import generate
 
@@ -22,15 +25,28 @@ def fetch_transcript_as_string(video_id: str) -> str:
     a combined string with each line's timestamp and text.
     By default, tries Hebrew or English transcripts if available.
     """
-    transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-    transcript_obj = transcript_list.find_transcript(['en', 'iw', 'he'])
-    lines = transcript_obj.fetch()
+    try:
+        load_dotenv()
+
+        ytt_api = YouTubeTranscriptApi(
+            proxy_config=GenericProxyConfig(
+                http_url=os.getenv("PROXY_HTTP"),
+                https_url=os.getenv("PROXY_HTTPS"),
+            )
+        )
+
+        transcript_list = ytt_api.list(video_id=video_id)
+        transcript_obj = transcript_list.find_transcript(['en', 'iw', 'he'])
+        lines = transcript_obj.fetch()
+    except Exception as e:
+        print("Error fetching transcript:", e)
+        raise e  # or handle it as needed
 
     transcript_str = ""
     for line in lines:
-        start_time = seconds_to_hhmmss(line['start'])
-        duration = seconds_to_hhmmss(line['duration'])
-        text = line['text']
+        start_time = seconds_to_hhmmss(line.start)      # Use attribute access
+        duration = seconds_to_hhmmss(line.duration)       # Use attribute access
+        text = line.text                                  # Use attribute access
         transcript_str += f"Start: {start_time}, Duration: {duration}\n{text}\n\n"
     return transcript_str
 
