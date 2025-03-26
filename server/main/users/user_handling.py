@@ -14,6 +14,7 @@ mode = os.environ.get('MODE')
 def login():
     data = request.get_json()  # Expects JSON payload with "email" and "password"
     response, status, session_id = proxy_logins_api(login_user, data, mode)
+
     if status == 200:
         resp = jsonify(response)
         # Set the session_id cookie

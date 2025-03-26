@@ -1,3 +1,4 @@
+import bcrypt
 import uuid
 from datetime import datetime, timedelta
 from db.DB import DB
@@ -27,7 +28,9 @@ def login_user(data):
             if result is None:
                 return {"status": "failed", "reason": "no such user is signed in"}, 401, 0, 0
             user_id, stored_password = result
-            if stored_password != password:
+
+            # Verify password using bcrypt.
+            if not bcrypt.checkpw(password.encode('utf-8'), stored_password.encode('utf-8')):
                 return {"status": "failed", "reason": "incorrect password"}, 401, 0, 0
 
             session_id = str(uuid.uuid4())
@@ -53,7 +56,7 @@ def register_user(data):
          "last name": <string>,
          "age": <int>
       }
-    After successful registration, automatically logs the user as a creator.
+    After successful registration, automatically logs the user in.
     Returns a 3-tuple:
       ( response_dict, http_status_code, session_id (str) or 0 )
     """
@@ -67,22 +70,26 @@ def register_user(data):
             if not email or not password or first_name is None or last_name is None or age is None:
                 return {"status": "failed", "reason": "missing required registration fields"}, 401, 0
 
+            # Check if a user with the given email already exists.
             cur.execute('SELECT user_id FROM "User" WHERE email = %s', (email,))
             if cur.fetchone():
                 return {"status": "failed", "reason": "email already connected to an account"}, 401, 0
 
+            # Hash the password using bcrypt.
+            hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
             cur.execute(
                 'INSERT INTO "User" (first_name, last_name, email, password, age) VALUES (%s, %s, %s, %s, %s) RETURNING user_id',
-                (first_name, last_name, email, password, age)
+                (first_name, last_name, email, hashed_password, age)
             )
             user_row = cur.fetchone()
             if user_row is None:
                 return {"status": "failed", "reason": "failed to register user"}, 500, 0
-        # End context to commit user insertion.
+        # End of transaction for user registration; commit occurs upon exiting the context.
 
-        # Log in the user.
-        login_response, status, session_id = login_user({"email": email, "password": password})
-        # Optionally, auto-register as creator here if needed (omitted as per your instructions).
+        # Log in the user immediately after registration.
+        login_response, status, session_id, user_id = login_user({"email": email, "password": password})
+        # Optionally, register as a creator here if needed.
         return login_response, status, session_id
     except Exception as e:
         print(e)
