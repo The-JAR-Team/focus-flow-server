@@ -22,7 +22,7 @@ def login():
             session_id,
             httponly=True,
             secure=True,  # set to True if using HTTPS
-            samesite='Lax'  # adjust as needed
+            samesite='none'  # adjust as needed
         )
         return resp, status
     return jsonify(response), status
@@ -41,7 +41,7 @@ def register():
             session_id,
             httponly=True,
             secure=True,
-            samesite='Lax'
+            samesite='none'
         )
         return resp, status
 
