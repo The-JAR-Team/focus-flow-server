@@ -1,19 +1,17 @@
-# videos.py
 import threading
-
 from flask import Blueprint, request, jsonify
-from db.db_api import *
+from db.db_api import (upload_video, update_video_details, remove_from_playlist,
+                       get_all_videos_user_can_access, get_questions_for_video_api)
 from logic.transcript_maker import generate_questions_from_transcript, gen_if_empty
 from server.main.utils import get_authenticated_user
 
 videos_bp = Blueprint('videos', __name__)
 
-
 @videos_bp.route('/videos/upload', methods=['POST'])
 def upload():
-    user_id, status = get_authenticated_user()
-    if status != 200:
-        return jsonify({"status": "failed", "reason": "unauthenticated"}), 401
+    resp, user_id, status = get_authenticated_user()
+    if resp is not None:
+        return resp, status
 
     data = request.get_json()
     response, code = upload_video(data, user_id)
@@ -35,41 +33,37 @@ def upload():
 
     return jsonify(response), code
 
-
 @videos_bp.route('/videos/update', methods=['POST'])
 def update():
-    user_id, status = get_authenticated_user()
-    if status != 200:
-        return jsonify({"status": "failed", "reason": "unauthenticated"}), 401
+    resp, user_id, status = get_authenticated_user()
+    if resp is not None:
+        return resp, status
 
     data = request.get_json()
-    # Now update_video_details expects the video JSON payload (which contains "playlist_item_id")
+    # update_video_details expects the video JSON payload (including "playlist_item_id")
     # and the user_id for ownership verification.
     response, code = update_video_details(data, user_id)
     return jsonify(response), code
 
-
 @videos_bp.route('/videos/remove_from_playlist', methods=['POST'])
 def remove_from_pl():
-    user_id, status = get_authenticated_user()
-    if status != 200:
-        return jsonify({"status": "failed", "reason": "unauthenticated"}), 401
+    resp, user_id, status = get_authenticated_user()
+    if resp is not None:
+        return resp, status
 
     data = request.get_json()
     # remove_from_playlist expects the user_id and a JSON payload containing the playlist_item_id.
     response, code = remove_from_playlist(user_id, data)
     return jsonify(response), code
 
-
 @videos_bp.route('/videos/accessible', methods=['GET'])
 def get_accessible_videos_api():
-    user_id, status = get_authenticated_user()
-    if status != 200:
-        return jsonify({"status": "failed", "reason": "unauthenticated"}), 401
+    resp, user_id, status = get_authenticated_user()
+    if resp is not None:
+        return resp, status
 
     response_data = get_all_videos_user_can_access(user_id)
-    return jsonify(response_data), 200 if response_data["status"] == "success" else 400
-
+    return jsonify(response_data), 200 if response_data.get("status") == "success" else 400
 
 @videos_bp.route('/videos/<string:youtube_id>/questions', methods=['GET'])
 def get_video_questions(youtube_id):
@@ -84,16 +78,15 @@ def get_video_questions(youtube_id):
     (which returns a JSON object with a "questions" array) and inserts its output under
     "video_questions" in the result.
     """
+    resp, user_id, status = get_authenticated_user()
+    if resp is not None:
+        return resp, status
+
     lang = request.args.get("lang", "Hebrew")
-
     # Retrieve questions from the database.
-    result = get_questions_for_video_api(youtube_id, lang)  # Aggregator function
-
-    # If no questions were found, call the generate function and insert its output.
+    result = get_questions_for_video_api(youtube_id, lang)
+    # If no questions were found, call the generation function.
     if not result.get("video_questions", {}).get("questions"):
         generated = generate_questions_from_transcript(youtube_id, lang)
-        # Assume generated is a dict like: { "questions": [ ... ] }
         result["video_questions"] = generated
-
     return jsonify(result), 200
-

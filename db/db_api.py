@@ -1,16 +1,15 @@
 """
 db_api.py
 
-This module acts as an aggregator for user, playlist, and video operations.
-All functions delegate to the corresponding functions in user_management,
-playlists_management, or video_management. Below each function, you'll find
-its expected input (arguments) and output (return values).
+This module acts as an aggregator for user, playlist, video, subscription,
+watch item, and question operations. All functions delegate to the corresponding
+functions in user_management, playlists_management, video_management,
+subscription_management, watch_management, or question_management. Below each function,
+you'll find its expected input (arguments) and output (return values).
 """
 
-from db import user_management, playlists_management, video_management, subscription_management, watch_management, \
-    question_management
+from db import user_management, playlists_management, video_management, subscription_management, watch_management, question_management
 from db.video_management import get_accessible_videos
-
 
 def login_user(data):
     """
@@ -98,7 +97,8 @@ def create_playlist(user_id, playlist_name, playlist_permission):
 
     Returns:
         tuple: (response_dict, http_status_code)
-          - response_dict (dict) with "status" ("success" or "failed"), "reason" on failure, and possibly "playlist_id" on success.
+          - response_dict (dict) with "status" ("success" or "failed"), "reason" on failure,
+            and possibly "playlist_id" on success.
           - http_status_code (int): 200 on success, other codes on failure.
     """
     return playlists_management.create_playlist(user_id, playlist_name, playlist_permission)
@@ -251,6 +251,7 @@ def update_video_details(data, user_id):
               "length": <str>,             // To be cast to INTERVAL (e.g. "00:12:34")
               "uploadby": <str>
             }
+        user_id (int): The ID of the user for whom the update is being made.
 
     Returns:
         tuple: (response_dict, http_status_code)
@@ -261,47 +262,160 @@ def update_video_details(data, user_id):
                 "video_id": <int if success>
               }
           - http_status_code (int)
-          :param data:
-          :param user_id:
     """
     return video_management.update_video_details(data, user_id)
 
 
 def subscribe_playlist(owner_id, data):
+    """
+    Subscribes a user to a playlist by delegating to subscription_management.subscribe_playlist.
+
+    Args:
+        owner_id (int): The ID of the owner (authenticated user) of the playlist.
+        data (dict): Must include:
+            {
+              "email": <str>,        // Email of the subscriber
+              "playlist_id": <int>     // The target playlist's ID
+            }
+
+    Returns:
+        tuple: (response_dict, http_status_code)
+    """
     return subscription_management.subscribe_playlist(owner_id, data)
 
 
 def unsubscribe_playlist(owner_id, data):
+    """
+    Unsubscribes a user from a playlist by delegating to subscription_management.unsubscribe_playlist.
+
+    Args:
+        owner_id (int): The ID of the owner (authenticated user) of the playlist.
+        data (dict): Must include:
+            {
+              "email": <str>,        // Email of the subscriber
+              "playlist_id": <int>     // The target playlist's ID
+            }
+
+    Returns:
+        tuple: (response_dict, http_status_code)
+    """
     return subscription_management.unsubscribe_playlist(owner_id, data)
 
 
 def log_watch_item(user_id, data):
+    """
+    Logs (or updates) a watch record for a given user and video by delegating to watch_management.log_watch.
+
+    Args:
+        user_id (int): The ID of the authenticated user.
+        data (dict): Must include:
+            {
+              "video_id": <int>,
+              "current_watch_time": <int>,
+              "time_before_jump": <int>
+            }
+
+    Returns:
+        tuple: (response_dict, http_status_code)
+    """
     return watch_management.log_watch(user_id, data)
 
 
 def get_watch_item(user_id, data):
+    """
+    Retrieves the watch record for a given user and video by delegating to watch_management.get_watch.
+
+    Args:
+        user_id (int): The ID of the authenticated user.
+        data (dict): Must include:
+            {
+              "video_id": <int>
+            }
+
+    Returns:
+        tuple: (response_dict, http_status_code)
+    """
     return watch_management.get_watch_item(user_id, data)
 
 
 def get_all_videos_user_can_access(user_id):
     """
-    High-level aggregator that calls get_accessible_videos from
-    your new module, or places the code inline.
+    Retrieves all videos accessible by a user by delegating to video_management.get_accessible_videos.
+
+    Args:
+        user_id (int): The ID of the authenticated user.
+
+    Returns:
+        tuple: (response_dict, http_status_code)
     """
     return get_accessible_videos(user_id)
 
 
 def get_questions_for_video_api(youtube_id, language):
+    """
+    Retrieves questions for a given YouTube video and language by delegating to question_management.get_questions_for_video.
+
+    Args:
+        youtube_id (str): The YouTube video ID.
+        language (str): The language (e.g. "Hebrew" or "English").
+
+    Returns:
+        dict: A dictionary of questions, e.g. { "questions": [ ... ] }
+    """
     return question_management.get_questions_for_video(youtube_id, language)
 
 
 def store_questions_in_db(youtube_id, language, questions):
+    """
+    Stores generated questions into the database by delegating to question_management.store_questions_in_db.
+
+    Args:
+        youtube_id (str): The YouTube video ID.
+        language (str): The language of the questions.
+        questions (list): A list of question dictionaries.
+
+    Returns:
+        int: The newly created question_group_id, or 0 on failure.
+    """
     return question_management.store_questions_in_db(youtube_id, language, questions)
 
 
 def questions_ready(youtube_id, language="Hebrew"):
-    return question_management.questions_ready(youtube_id)
+    """
+    Checks if there are existing questions for the given YouTube video and language by delegating to question_management.questions_ready.
+
+    Args:
+        youtube_id (str): The YouTube video ID.
+        language (str): The language (default "Hebrew").
+
+    Returns:
+        int: The count of questions found (or 0 if none).
+    """
+    return question_management.questions_ready(youtube_id, language)
 
 
 def get_user_info(user_id):
+    """
+    Retrieves user information for the given user_id by delegating to user_management.get_user_info.
+
+    Args:
+        user_id (int): The user's ID.
+
+    Returns:
+        tuple: (response_dict, http_status_code)
+          - response_dict (dict) containing all fields from the User table.
+    """
     return user_management.get_user_info(user_id)
+
+
+def logout_user(session_id):
+    """
+    Invalidates the session by removing it from the Sessions table, by delegating to user_management.logout_user.
+
+    Args:
+        session_id (str): The session ID to invalidate.
+
+    Returns:
+        tuple: (response_dict, http_status_code)
+    """
+    return user_management.logout_user(session_id)
