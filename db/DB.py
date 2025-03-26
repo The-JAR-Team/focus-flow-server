@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from dotenv import load_dotenv
 import psycopg2
 import os
@@ -13,11 +14,9 @@ class DB:
         Returns a PostgreSQL database connection.
         Loads environment variables and creates the connection if needed.
         """
-        # Check if connection exists and is open (closed==0 means open)
         if cls._connection and cls._connection.closed == 0:
             return cls._connection
         else:
-            # Load environment variables on first use
             if not cls._instance:
                 load_dotenv()
                 cls._instance = cls()
@@ -26,9 +25,27 @@ class DB:
                 user=os.getenv("DB_USER"),
                 password=os.getenv("DB_PASSWORD"),
                 dbname=os.getenv("DB_NAME"),
-                port=os.getenv("DB_PORT", 5432)  # Default PostgreSQL port is 5432
+                port=os.getenv("DB_PORT", 5432)
             )
             return cls._connection
+
+    @classmethod
+    @contextmanager
+    def get_cursor(cls):
+        """
+        Context manager for getting a database cursor.
+        Commits the transaction if no exception is raised, otherwise rolls back.
+        """
+        conn = cls.get_connection()
+        cursor = conn.cursor()
+        try:
+            yield cursor
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            cursor.close()
 
     @classmethod
     def close_connection(cls):
@@ -36,31 +53,3 @@ class DB:
         if cls._connection and cls._connection.closed == 0:
             cls._connection.close()
             cls._connection = None
-
-
-def print_all_tables(schema_name):
-    # Get the connection using the DB class
-    conn = DB.get_connection()
-    cur = conn.cursor()
-
-    # Query to fetch all table names in the specified schema
-    query = """
-    SELECT table_name
-    FROM information_schema.tables
-    WHERE table_schema = %s;
-    """
-    cur.execute(query, (schema_name,))
-    tables = cur.fetchall()
-
-    print(f"Tables in schema '{schema_name}':")
-    for table in tables:
-        print(table[0])
-
-    cur.close()
-
-
-if __name__ == "__main__":
-    # Replace "MyDatabase" with your target schema name if needed.
-    print_all_tables("MyDatabase")
-    DB.close_connection()
-
