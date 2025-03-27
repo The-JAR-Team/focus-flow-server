@@ -11,6 +11,7 @@ you'll find its expected input (arguments) and output (return values).
 from db import user_management, playlists_management, video_management, subscription_management, watch_management, question_management
 from db.video_management import get_accessible_videos
 
+
 def login_user(data):
     """
     Logs in a user by delegating to user_management.login_user.
