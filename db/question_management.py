@@ -14,7 +14,7 @@ def parse_hhmmss_to_time(hhmmss_str):
 
 def store_questions_in_db(youtube_id, language, questions):
     """
-    Stores a batch of generated questions into the Question_Group and Question tables.
+    Stores a batch of generated questions into the Question_Group and Question debug.
 
     Args:
       youtube_id (str): The ID of the YouTube video, stored in Question_Group.
