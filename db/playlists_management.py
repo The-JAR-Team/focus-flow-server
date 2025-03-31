@@ -239,3 +239,108 @@ def update_playlist_name(user_id, data):
     except Exception as e:
         conn.rollback()
         return ({"status": "failed", "reason": str(e)}, 500)
+
+
+def get_playlist_subscribers(owner_id, playlist_id):
+    """
+    Retrieves a list of subscriber emails for the specified playlist_id,
+    only if owner_id matches the playlist's user_id.
+
+    Args:
+        owner_id (int): The ID of the user who owns the playlist.
+        playlist_id (int): The ID of the target playlist.
+
+    Returns:
+        tuple: (response_dict, http_status_code)
+            - On success:
+                {
+                  "status": "success",
+                  "subscribers": [ "email1@example.com", "email2@example.com", ... ]
+                }
+            - On failure:
+                { "status": "failed", "reason": <error message> }
+    """
+    try:
+        conn = DB.get_connection()
+        cur = conn.cursor()
+
+        # Verify that the playlist belongs to the owner_id
+        cur.execute('SELECT user_id FROM "Playlist" WHERE playlist_id = %s', (playlist_id,))
+        row = cur.fetchone()
+        if row is None:
+            return {"status": "failed", "reason": "Playlist not found"}, 404
+
+        playlist_owner = row[0]
+        if playlist_owner != owner_id:
+            return {"status": "failed", "reason": "Not authorized to view subscribers for this playlist"}, 403
+
+        # Retrieve subscriber emails by joining the Subscription and User tables
+        cur.execute(
+            '''
+            SELECT u.email
+            FROM "Subscription" s
+            JOIN "User" u ON s.user_id = u.user_id
+            WHERE s.playlist_id = %s
+            ''',
+            (playlist_id,)
+        )
+        rows = cur.fetchall()
+
+        subscribers = [r[0] for r in rows]
+
+        return {"status": "success", "subscribers": subscribers}, 200
+
+    except Exception as e:
+        print("Error in get_playlist_subscribers:", e)
+        return {"status": "failed", "reason": str(e)}, 500
+
+
+def get_playlist_subscriber_count(owner_id, playlist_id):
+    """
+    Returns the number of subscribers for a given playlist_id,
+    only if the playlist is owned by owner_id.
+
+    Args:
+        owner_id (int): The user who owns the playlist.
+        playlist_id (int): The playlist ID.
+
+    Returns:
+        tuple: (response_dict, http_status_code)
+            - On success:
+                {
+                  "status": "success",
+                  "count": <number_of_subscribers>
+                }
+            - On failure:
+                { "status": "failed", "reason": <error message> }
+    """
+    try:
+        conn = DB.get_connection()
+        cur = conn.cursor()
+
+        # Verify ownership
+        cur.execute('SELECT user_id FROM "Playlist" WHERE playlist_id = %s', (playlist_id,))
+        row = cur.fetchone()
+        if row is None:
+            return {"status": "failed", "reason": "Playlist not found"}, 404
+
+        playlist_owner = row[0]
+        if playlist_owner != owner_id:
+            return {"status": "failed", "reason": "Not authorized to view subscriber for this playlist"}, 403
+
+        # Count the subscribers
+        cur.execute(
+            '''
+            SELECT COUNT(*)
+            FROM "Subscription"
+            WHERE playlist_id = %s
+            ''',
+            (playlist_id,)
+        )
+        count = cur.fetchone()[0]
+
+        return {"status": "success", "count": count}, 200
+
+    except Exception as e:
+        print("Error in get_playlist_subscriber_count:", e)
+        return {"status": "failed", "reason": str(e)}, 500

@@ -420,3 +420,49 @@ def logout_user(session_id):
         tuple: (response_dict, http_status_code)
     """
     return user_management.logout_user(session_id)
+
+
+from db import subscription_management
+
+def get_playlist_subscribers(owner_id, playlist_id):
+    """
+    Retrieves subscriber emails for a playlist by delegating to
+    subscription_management.get_playlist_subscribers.
+
+    Args:
+        owner_id (int): The user who owns the playlist.
+        playlist_id (int): The ID of the target playlist.
+
+    Returns:
+        tuple: (response_dict, http_status_code)
+          - On success:
+              {
+                "status": "success",
+                "subscribers": ["email1@example.com", "email2@example.com", ...]
+              }
+          - On failure:
+              { "status": "failed", "reason": <error message> }
+    """
+    return playlists_management.get_playlist_subscribers(owner_id, playlist_id)
+
+
+def get_playlist_subscriber_count(owner_id, playlist_id):
+    """
+    Returns the number of subscribers for a playlist by delegating to
+    subscription_management.get_playlist_subscriber_count.
+
+    Args:
+        owner_id (int): The user who owns the playlist.
+        playlist_id (int): The ID of the target playlist.
+
+    Returns:
+        tuple: (response_dict, http_status_code)
+          - On success:
+              {
+                "status": "success",
+                "count": <number_of_subscribers>
+              }
+          - On failure:
+              { "status": "failed", "reason": <error message> }
+    """
+    return playlists_management.get_playlist_subscriber_count(owner_id, playlist_id)
