@@ -39,6 +39,10 @@ def upload_video(data, user_id):
         length_str = data.get("length")  # Example: "00:12:34"
         uploadby = data.get("uploadby")
 
+        # Check that 'playlists' is provided and not empty
+        if not playlists or len(playlists) == 0:
+            return {"status": "failed", "reason": "No playlists provided."}, 400
+
         # Insert the new video into the Video table.
         # Note: the "length" column is of type INTERVAL, so we cast the string.
         cur.execute("""
@@ -230,7 +234,8 @@ def get_accessible_videos(user_id):
                   w.watch_item_id,
                   w.current_watch_time,
                   w.time_before_jump,
-                  w.last_updated
+                  w.last_updated,
+                  v.added_date
                 FROM accessible_playlists a
                 JOIN "Playlist" p ON p.playlist_id = a.playlist_id
                 JOIN "User" ou ON ou.user_id = p.user_id
@@ -269,6 +274,7 @@ def get_accessible_videos(user_id):
                 current_watch_time = row[15]
                 time_before_jump = row[16]
                 last_updated = row[17]
+                added_date = row[18]
 
                 # If we haven't seen this playlist yet, create a dict for it.
                 if playlist_id not in playlists_map:
@@ -278,6 +284,7 @@ def get_accessible_videos(user_id):
                         "playlist_name": playlist_name,
                         "playlist_permission": playlist_permission,
                         "playlist_owner_name": owner_full_name,
+                        "playlist_owner_id": owner_id,
                         "playlist_items": []
                     }
 
@@ -297,6 +304,7 @@ def get_accessible_videos(user_id):
                     "video_id": video_id,
                     "video_name": video_name,
                     "description": video_desc,
+                    "added_date": added_date,
                     "subject": subject,
                     "external_id": external_id,
                     "upload_by": upload_by,

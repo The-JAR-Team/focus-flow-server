@@ -88,7 +88,7 @@ def register_user(data):
         # End of transaction for user registration; commit occurs upon exiting the context.
 
         # Log in the user immediately after registration.
-        login_response, status, session_id, user_id = login_user({"email": email, "password": password})
+        login_response, status, session_id = login_user({"email": email, "password": password})
         # Optionally, register as a creator here if needed.
         return login_response, status, session_id
     except Exception as e:

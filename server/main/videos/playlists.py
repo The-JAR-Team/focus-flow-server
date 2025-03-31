@@ -66,3 +66,47 @@ def update_name():
     data = request.get_json()
     response, code = update_playlist_name(user_id, data)
     return jsonify(response), code
+
+
+@playlist_bp.route('/playlists/<int:playlist_id>/subscribers', methods=['GET'])
+def get_subscribers(playlist_id):
+    """
+    GET /playlists/<playlist_id>/subscribers
+
+    Returns a JSON object listing the emails of all subscribers to this playlist,
+    only if the current user owns the playlist.
+
+    Example Response (on success):
+    {
+      "status": "success",
+      "subscribers": ["user1@example.com", "user2@example.com"]
+    }
+    """
+    resp, user_id, status = get_authenticated_user()
+    if resp is not None:
+        return resp, status
+
+    response_data, code = get_playlist_subscribers(user_id, playlist_id)
+    return jsonify(response_data), code
+
+
+@playlist_bp.route('/playlists/<int:playlist_id>/subscriber_count', methods=['GET'])
+def get_subscriber_count(playlist_id):
+    """
+    GET /playlists/<playlist_id>/subscriber_count
+
+    Returns a JSON object with the count of subscribers for this playlist,
+    only if the current user owns the playlist.
+
+    Example Response (on success):
+    {
+      "status": "success",
+      "count": 5
+    }
+    """
+    resp, user_id, status = get_authenticated_user()
+    if resp is not None:
+        return resp, status
+
+    response_data, code = get_playlist_subscriber_count(user_id, playlist_id)
+    return jsonify(response_data), code
