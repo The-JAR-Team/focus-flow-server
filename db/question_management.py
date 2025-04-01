@@ -2,130 +2,119 @@ import datetime
 from db.DB import DB
 
 
-def parse_hhmmss_to_time(hhmmss_str):
+def parse_hhmmss_to_time(time_str):
     """
-    Converts a string in 'HH:MM:SS' format to a Python time object.
-    E.g. '00:01:48' -> datetime.time(0, 1, 48)
+    Parses an "HH:MM:SS" string into a datetime.time object.
+    Returns None if input is None, empty, or invalid format.
     """
-    if not hhmmss_str:
-        return None  # If empty or missing
-    return datetime.datetime.strptime(hhmmss_str, "%H:%M:%S").time()
+    if not time_str:
+        return None
+    try:
+        # Use strptime to parse the time string
+        parsed_time = datetime.datetime.strptime(time_str, '%H:%M:%S').time()
+        return parsed_time
+    except ValueError:
+        print(f"Warning: Could not parse time string '{time_str}'. Skipping time field.")
+        return None
 
 
 def store_questions_in_db(youtube_id, language, questions):
     """
-    Stores a batch of generated questions into the Question_Group and Question tables.
+    Stores a batch of generated questions. Reuses existing Question_Group if found,
+    otherwise creates a new one. Optionally clears old questions first.
 
     Args:
       youtube_id (str): The ID of the YouTube video, stored in Question_Group.
       language (str): e.g. "Hebrew" or "en".
-      questions (list): A list of dictionaries, each expected to have fields:
-        {
-          "q_id": <str>,                     # e.g. "q1"
-          "question_origin": <str>,          # e.g. "00:01:48"
-          "question_explanation_end": <str>, # e.g. "00:02:15"
-          "difficulty": <int>,               # e.g. 3 (1-10)
-          "keywords": <list[str]>,           # e.g. ["term", "definition"]
-          "question": <str>,
-          "answer1": <str>,
-          "answer2": <str>,
-          "answer3": <str>,
-          "answer4": <str>,
-          "explanation_snippet": <str>
-        }
+      questions (list): A list of dictionaries with question data.
+      clear_existing (bool): If True, deletes existing questions for this group
+                               before inserting new ones. Defaults to False.
 
     Returns:
-      int: The newly created question_group_id, or 0 on failure.
+      int: The relevant question_group_id, or 0 on failure.
     """
-    group_id = 0  # Initialize group_id
+    group_id = 0 # Initialize group_id
+    clear_existing = False # Set to True if you want to replace old questions
+
     try:
-        # Use the provided DB class's context manager
         with DB.get_cursor() as cur:
-            # 1) Insert a row into Question_Group (one per youtube_id + language combo).
+            # 1) UPSERT: Try to insert the group. If youtube_id + language combo
+            # already exists (violates unique constraint), do nothing.
+            # This relies on the unique_youtube_language constraint existing.
             cur.execute(
                 '''INSERT INTO "Question_Group" (youtube_id, language)
                    VALUES (%s, %s)
-                   RETURNING question_group_id
+                   ON CONFLICT (youtube_id, language) DO NOTHING
                 ''',
                 (youtube_id, language)
             )
-            # Ensure fetchone() didn't return None before accessing [0]
+
+            # 2) SELECT the group_id. It will exist either because it was just
+            # inserted or because it was already there (ON CONFLICT).
+            cur.execute(
+                '''SELECT question_group_id
+                   FROM "Question_Group"
+                   WHERE youtube_id = %s AND language = %s
+                ''',
+                (youtube_id, language)
+            )
             result = cur.fetchone()
             if result is None:
-                # Rollback should happen automatically due to exception + context manager
-                raise Exception("Failed to insert into Question_Group or retrieve group_id.")
+                # This should generally not happen if the UPSERT logic works and
+                # the unique constraint exists. Could indicate a deeper issue.
+                raise Exception(f"Failed to find or create Question_Group for youtube_id={youtube_id}, language={language}")
             group_id = result[0]
 
-            # 2) Insert each question into Question, linked to group_id.
+            # 3) OPTIONAL: Clear existing questions for this group if desired.
+            if clear_existing:
+                print(f"Clearing existing questions for group_id: {group_id}")
+                cur.execute('DELETE FROM "Question" WHERE question_group_id = %s', (group_id,))
+
+            # 4) Insert each new question into Question, linked to the group_id.
             for q in questions:
-                # Extract all fields, providing defaults (None) if missing
+                # --- Extract fields ---
                 q_id = q.get("q_id")
                 question_origin_str = q.get("question_origin")
-                question_explanation_end_str = q.get("question_explanation_end")  # New
-                difficulty = q.get("difficulty")  # New
-                keywords = q.get("keywords")  # New (should be a list)
+                question_explanation_end_str = q.get("question_explanation_end")
+                difficulty = q.get("difficulty")
+                keywords = q.get("keywords")
                 question_txt = q.get("question")
                 answer1 = q.get("answer1")
                 answer2 = q.get("answer2")
                 answer3 = q.get("answer3")
                 answer4 = q.get("answer4")
-                explanation_snippet = q.get("explanation_snippet")  # New
+                explanation_snippet = q.get("explanation_snippet")
 
                 # --- Data Type Preparations ---
-                # Convert time strings -> time objects (or None) using the provided helper
                 question_origin_time = parse_hhmmss_to_time(question_origin_str)
                 question_explanation_end_time = parse_hhmmss_to_time(question_explanation_end_str)
-
-                # Ensure keywords is a list or None for db array insertion
-                # psycopg2 typically handles Python lists correctly for text[] columns
                 db_keywords = keywords if isinstance(keywords, list) else None
-
-                # Ensure difficulty is an integer or None
                 db_difficulty = int(difficulty) if difficulty is not None else None
 
                 # --- Execute INSERT ---
                 cur.execute(
                     '''INSERT INTO "Question" (
-                           question_group_id,          -- 1
-                           q_id,                       -- 2
-                           question_origin,            -- 3
-                           question_explanation_end,   -- 4 (New)
-                           difficulty,                 -- 5 (New)
-                           keywords,                   -- 6 (New)
-                           question,                   -- 7 
-                           answer1,                    -- 8
-                           answer2,                    -- 9
-                           answer3,                    -- 10
-                           answer4,                    -- 11
-                           explanation_snippet         -- 12 (New)
+                           question_group_id, q_id, question_origin, question_explanation_end,
+                           difficulty, keywords, question, answer1, answer2, answer3, answer4,
+                           explanation_snippet
                        )
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ''',
                     (
-                        group_id,  # 1
-                        q_id,  # 2
-                        question_origin_time,  # 3
-                        question_explanation_end_time,  # 4 (New)
-                        db_difficulty,  # 5 (New)
-                        db_keywords,  # 6 (New, pass list or None)
-                        question_txt,  # 7
-                        answer1,  # 8
-                        answer2,  # 9
-                        answer3,  # 10
-                        answer4,  # 11
-                        explanation_snippet  # 12 (New)
+                        group_id, q_id, question_origin_time, question_explanation_end_time,
+                        db_difficulty, db_keywords, question_txt, answer1, answer2, answer3,
+                        answer4, explanation_snippet
                     )
                 )
 
             # Commit happens automatically when 'with' block exits without error
-
             return group_id
 
     except Exception as e:
         # Rollback happens automatically due to exception + context manager
         print(f"Error storing questions for youtube_id {youtube_id} (group_id {group_id}): {e}")
-        # Consider more specific error handling/logging based on exception type
-        return 0  # Return 0 or raise exception as appropriate
+        return 0
+
 
 
 def time_to_hhmmss(time_obj):
