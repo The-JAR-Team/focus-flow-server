@@ -1,7 +1,7 @@
 import threading
 from flask import Blueprint, request, jsonify
 from db.db_api import (upload_video, update_video_details, remove_from_playlist,
-                       get_all_videos_user_can_access, get_questions_for_video_api)
+                       get_all_videos_user_can_access, get_questions_for_video_api, get_accessible_videos)
 from logic.transcript_maker import generate_questions_from_transcript, gen_if_empty
 from server.main.utils import get_authenticated_user
 
@@ -75,19 +75,40 @@ def get_video_questions(youtube_id):
       lang: language code (default is 'Hebrew')
 
     This endpoint retrieves questions for the given YouTube video and language.
-    If the "video_questions" list is empty, it calls generate_questions_from_transcript()
-    (which returns a JSON object with a "questions" array) and inserts its output under
-    "video_questions" in the result.
+    It first ensures that the authenticated user has access to the video by checking
+    against the accessible videos returned by get_accessible_videos. If not accessible,
+    it returns a 403 error.
+    If no questions exist, it calls generate_questions_from_transcript() to generate and store them.
     """
+    # Authenticate user using session cookie.
     resp, user_id, status = get_authenticated_user()
     if resp is not None:
         return resp, status
 
+    # Retrieve accessible videos for the user.
+    accessible_videos = get_accessible_videos(user_id)
+    if accessible_videos.get("status") != "success":
+        return jsonify({"status": "failed", "reason": "failed to retrieve accessible videos"}), 403
+
+    # Extract all accessible YouTube IDs from the user's playlists.
+    accessible_ids = set()
+    for playlist in accessible_videos.get("playlists", []):
+        for item in playlist.get("playlist_items", []):
+            ext_id = item.get("external_id")
+            if ext_id:
+                accessible_ids.add(ext_id)
+
+    # Check if the requested youtube_id is among the accessible ones.
+    if youtube_id not in accessible_ids:
+        return jsonify({"status": "failed", "reason": "user not authorized for this video"}), 403
+
     lang = request.args.get("lang", "Hebrew")
     # Retrieve questions from the database.
     result = get_questions_for_video_api(youtube_id, lang)
-    # If no questions were found, call the generation function.
+    # If no questions were found, generate them.
     if not result.get("video_questions", {}).get("questions"):
         generated = generate_questions_from_transcript(youtube_id, lang)
         result["video_questions"] = generated
+
     return jsonify(result), 200
+
