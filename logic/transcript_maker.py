@@ -2,6 +2,7 @@ import json
 import math
 import os
 import threading
+import time
 
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -24,29 +25,41 @@ def fetch_transcript_as_string(video_id: str) -> str:
     Fetches the transcript from YouTube for the given `video_id` and returns
     a combined string with each line's timestamp and text.
     By default, tries Hebrew or English transcripts if available.
+    Retries up to 15 times (with a 0.1 sec delay between attempts) before raising an exception.
     """
-    try:
-        load_dotenv()
+    max_attempts = 15
+    attempt = 0
+    last_exception = None
 
-        ytt_api = YouTubeTranscriptApi(
-            proxy_config=GenericProxyConfig(
-                http_url=os.getenv("PROXY_HTTP"),
-                https_url=os.getenv("PROXY_HTTPS"),
+    while attempt < max_attempts:
+        try:
+            load_dotenv()
+            ytt_api = YouTubeTranscriptApi(
+                proxy_config=GenericProxyConfig(
+                    http_url=os.getenv("PROXY_HTTP"),
+                    https_url=os.getenv("PROXY_HTTPS"),
+                )
             )
-        )
 
-        transcript_list = ytt_api.list(video_id=video_id)
-        transcript_obj = transcript_list.find_transcript(['en', 'iw', 'he'])
-        lines = transcript_obj.fetch()
-    except Exception as e:
-        print("Error fetching transcript:", e)
-        raise e  # or handle it as needed
+            transcript_list = ytt_api.list(video_id=video_id)
+            transcript_obj = transcript_list.find_transcript(['en', 'iw', 'he'])
+            lines = transcript_obj.fetch()
+            # If successful, break out of the loop.
+            break
+        except Exception as e:
+            print(f"Attempt {attempt + 1} failed: {e}")
+            last_exception = e
+            attempt += 1
+            time.sleep(0.1)  # Wait 0.1 seconds before trying again.
+    else:
+        # If we've exhausted all attempts, raise the last encountered exception.
+        raise last_exception
 
     transcript_str = ""
     for line in lines:
-        start_time = seconds_to_hhmmss(line.start)      # Use attribute access
-        duration = seconds_to_hhmmss(line.duration)       # Use attribute access
-        text = line.text                                  # Use attribute access
+        start_time = seconds_to_hhmmss(line.start)
+        duration = seconds_to_hhmmss(line.duration)
+        text = line.text
         transcript_str += f"Start: {start_time}, Duration: {duration}\n{text}\n\n"
     return transcript_str
 
@@ -113,7 +126,7 @@ def split_transcript(transcript_text, chunk_duration=1800):
     return chunks
 
 
-def generate_questions_from_transcript(youtube_id: str, lang="Hebrew", chunk_duration=1800):
+def generate_questions_from_transcript(youtube_id: str, lang="Hebrew", chunk_duration=1200):
     """
     Splits the transcript into multiple consecutive 30-minute (by default) chunks,
     processes them in parallel, and combines all resulting questions.
@@ -123,48 +136,57 @@ def generate_questions_from_transcript(youtube_id: str, lang="Hebrew", chunk_dur
         "questions": [
           { "q_id": "q1", "question_origin": "...", "question": "...", "answer1": "..." },
           ...
-        ]
+        ],
+        "error": <error message if any, otherwise omitted>
       }
     """
-    print(f"Generating {lang} questions for {youtube_id} with chunk size {chunk_duration} seconds...")
-    transcript_text = fetch_transcript_as_string(youtube_id)
-    chunks = split_transcript(transcript_text, chunk_duration)
+    try:
+        print(f"Generating {lang} questions for {youtube_id} with chunk size {chunk_duration} seconds...")
+        transcript_text = fetch_transcript_as_string(youtube_id)
+        chunks = split_transcript(transcript_text, chunk_duration)
 
-    results = [None] * len(chunks)
+        results = [None] * len(chunks)
 
-    def worker(i, chunk_text):
-        # Call the generative API for this chunk
-        result_str = generate(text_file=chunk_text, lang=lang)
-        try:
-            result_dict = json.loads(result_str)
-            questions = result_dict.get("questions", [])
-        except json.JSONDecodeError as e:
-            print(f"Error parsing JSON for chunk {i+1}: {e}")
-            questions = []
-        results[i] = questions
+        def worker(i, chunk_text):
+            try:
+                # Call the generative API for this chunk.
+                result_str = generate(text_file=chunk_text, lang=lang)
+                result_dict = json.loads(result_str)
+                questions = result_dict.get("questions", [])
+            except json.JSONDecodeError as e:
+                print(f"Error parsing JSON for chunk {i+1}: {e}")
+                questions = []
+            except Exception as ex:
+                print(f"Error in worker for chunk {i+1}: {ex}")
+                questions = []
+            results[i] = questions
 
-    # Start threads for each chunk
-    threads = []
-    for i, chunk_text in enumerate(chunks):
-        t = threading.Thread(target=worker, args=(i, chunk_text))
-        t.start()
-        threads.append(t)
+        # Start a thread for each chunk.
+        threads = []
+        for i, chunk_text in enumerate(chunks):
+            t = threading.Thread(target=worker, args=(i, chunk_text))
+            t.start()
+            threads.append(t)
 
-    # Wait for all threads to finish
-    for t in threads:
-        t.join()
+        # Wait for all threads to finish.
+        for t in threads:
+            t.join()
 
-        # Combine questions from all chunks (no deduping by q_id)
-    all_questions = []
-    for q_list in results:
-        if q_list:
-            all_questions.extend(q_list)
+        # Combine questions from all chunks (without deduping).
+        all_questions = []
+        for q_list in results:
+            if q_list:
+                all_questions.extend(q_list)
 
-    # Store in DB
-    store_questions_in_db(youtube_id, lang, all_questions)
+        # Store the questions in the database.
+        store_questions_in_db(youtube_id, lang, all_questions)
 
-    print(f"Finished generation for {lang}. Found {len(all_questions)} questions total.")
-    return {"questions": all_questions}
+        print(f"Finished generation for {lang}. Found {len(all_questions)} questions total.")
+        return {"questions": all_questions}
+    except Exception as e:
+        print(f"Error in generate_questions_from_transcript: {e}")
+        # Instead of raising an error, return an error message with an empty list.
+        return {"questions": [], "error": str(e)}
 
 
 def gen_if_empty(youtube_id: str, lang="Hebrew"):
