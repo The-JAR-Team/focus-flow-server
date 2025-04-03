@@ -23,7 +23,7 @@ def generate(text_file: str, lang: str = "Hebrew") -> str:
     """
     load_dotenv()
     client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-    model = "gemini-2.0-flash"
+    model = "gemini-2.5-pro-exp-03-25"
 
     # Prepare the user content (the transcript / text input)
     contents = [
@@ -163,7 +163,6 @@ def generate(text_file: str, lang: str = "Hebrew") -> str:
         ),
         system_instruction=[types.Part.from_text(text=system_instruction_text)],
     )
-
     max_attempts = 3
     attempt = 0
     last_exception = None
