@@ -242,7 +242,7 @@ def get_accessible_videos(user_id):
                 JOIN "Playlist_Item" pi ON pi.playlist_id = p.playlist_id
                 JOIN "Video" v ON v.video_id = pi.video_id
                 LEFT JOIN "Watch_Item" w 
-                       ON w.video_id = v.video_id
+                       ON w.youtube_id = v.youtube_id
                       AND w.user_id = %(user_id)s
                 ORDER BY p.playlist_id, pi.playlist_item_id;
             """

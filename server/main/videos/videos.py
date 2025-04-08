@@ -1,11 +1,12 @@
 import threading
 from flask import Blueprint, request, jsonify
 from db.db_api import (upload_video, update_video_details, remove_from_playlist,
-                       get_all_videos_user_can_access, get_questions_for_video_api, get_accessible_videos)
+                       get_all_videos_user_can_access, get_questions_for_video_api)
 from logic.transcript_maker import generate_questions_from_transcript, gen_if_empty
-from server.main.utils import get_authenticated_user
+from server.main.utils import get_authenticated_user, check_authenticated_video
 
 videos_bp = Blueprint('videos', __name__)
+
 
 @videos_bp.route('/videos/upload', methods=['POST'])
 def upload():
@@ -33,6 +34,7 @@ def upload():
 
     return jsonify(response), code
 
+
 @videos_bp.route('/videos/update', methods=['POST'])
 def update():
     resp, user_id, status = get_authenticated_user()
@@ -55,6 +57,7 @@ def remove_from_pl():
     # remove_from_playlist expects the user_id and a JSON payload containing the playlist_item_id.
     response, code = remove_from_playlist(user_id, data)
     return jsonify(response), code
+
 
 @videos_bp.route('/videos/accessible', methods=['GET'])
 def get_accessible_videos_api():
@@ -81,34 +84,18 @@ def get_video_questions(youtube_id):
     If no questions exist, it calls generate_questions_from_transcript() to generate and store them.
     """
     # Authenticate user using session cookie.
-    resp, user_id, status = get_authenticated_user()
-    if resp is not None:
-        return resp, status
+    message, user_id, status = get_authenticated_user()
 
-    # Retrieve accessible videos for the user.
-    accessible_videos = get_accessible_videos(user_id)
-    if accessible_videos.get("status") != "success":
-        return jsonify({"status": "failed", "reason": "failed to retrieve accessible videos"}), 403
+    if status == 200:
+        message, status = check_authenticated_video(youtube_id, user_id)
 
-    # Extract all accessible YouTube IDs from the user's playlists.
-    accessible_ids = set()
-    for playlist in accessible_videos.get("playlists", []):
-        for item in playlist.get("playlist_items", []):
-            ext_id = item.get("external_id")
-            if ext_id:
-                accessible_ids.add(ext_id)
+        if status == 200:
+            lang = request.args.get("lang", "Hebrew")
+            # Retrieve questions from the database.
+            message = get_questions_for_video_api(youtube_id, lang)
+            # If no questions were found, generate them.
+            if not message.get("video_questions", {}).get("questions"):
+                generated = generate_questions_from_transcript(youtube_id, lang)
+                message["video_questions"] = generated
 
-    # Check if the requested youtube_id is among the accessible ones.
-    if youtube_id not in accessible_ids:
-        return jsonify({"status": "failed", "reason": "user not authorized for this video"}), 403
-
-    lang = request.args.get("lang", "Hebrew")
-    # Retrieve questions from the database.
-    result = get_questions_for_video_api(youtube_id, lang)
-    # If no questions were found, generate them.
-    if not result.get("video_questions", {}).get("questions"):
-        generated = generate_questions_from_transcript(youtube_id, lang)
-        result["video_questions"] = generated
-
-    return jsonify(result), 200
-
+    return jsonify(message), status

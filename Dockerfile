@@ -47,7 +47,7 @@ COPY . .
 # We bind to 0.0.0.0 and the $PORT Cloud Run provides.
 # '-w 2' starts 2 worker processes (adjust based on Cloud Run instance CPU/memory).
 # Using 'sh -c' allows the $PORT environment variable to be expanded correctly.
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --workers 3 --timeout 3600 server.main.app:app"]
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --workers 5 --timeout 3600 server.main.app:app"]
 
 # For testing without Gunicorn:
 #CMD ["python", "server/main/app.py"]

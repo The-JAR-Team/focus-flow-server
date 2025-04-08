@@ -345,9 +345,6 @@ def get_all_videos_user_can_access(user_id):
 
     Args:
         user_id (int): The ID of the authenticated user.
-
-    Returns:
-        tuple: (response_dict, http_status_code)
     """
     return get_accessible_videos(user_id)
 
@@ -423,6 +420,7 @@ def logout_user(session_id):
 
 
 from db import subscription_management
+
 
 def get_playlist_subscribers(owner_id, playlist_id):
     """
