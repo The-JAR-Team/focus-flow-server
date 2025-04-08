@@ -232,8 +232,7 @@ def get_accessible_videos(user_id):
                   v.upload_by,
                   v.length,
                   w.watch_item_id,
-                  w.current_watch_time,
-                  w.time_before_jump,
+                  w.current_time,
                   w.last_updated,
                   v.added_date
                 FROM accessible_playlists a
@@ -271,10 +270,9 @@ def get_accessible_videos(user_id):
                 upload_by = row[12]
                 length = row[13]
                 watch_item_id = row[14]
-                current_watch_time = row[15]
-                time_before_jump = row[16]
-                last_updated = row[17]
-                added_date = row[18]
+                current_time = row[15]
+                last_updated = row[16]
+                added_date = row[17]
 
                 # If we haven't seen this playlist yet, create a dict for it.
                 if playlist_id not in playlists_map:
@@ -293,8 +291,7 @@ def get_accessible_videos(user_id):
                 if watch_item_id is not None:
                     watch_item_data = {
                         "watch_item_id": watch_item_id,
-                        "current_watch_time": current_watch_time,
-                        "time_before_jump": time_before_jump,
+                        "current_time": current_time,
                         "last_updated": str(last_updated) if last_updated else None
                     }
 

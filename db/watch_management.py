@@ -1,6 +1,7 @@
 from db.DB import DB
 from datetime import datetime
 
+
 def log_watch(user_id, data):
     """
     Logs or updates watch data for the given user and video.
@@ -8,8 +9,7 @@ def log_watch(user_id, data):
     Expects:
     {
       "video_id": <int>,
-      "current_watch_time": <int>,   // optional, defaults to 0 if missing
-      "time_before_jump": <int>      // optional, defaults to 0 if missing
+      "current_time": <float>,   // optional, defaults to 0.0 if missing
     }
 
     If a Watch_Item row already exists for (user_id, video_id), it updates it.
@@ -25,12 +25,11 @@ def log_watch(user_id, data):
     """
     try:
         with DB.get_cursor() as cur:
-            video_id = data.get("video_id")
+            video_id = data.get("youtube_id")
             if not video_id:
                 return {"status": "failed", "reason": "Missing video_id"}, 400
 
-            current_watch_time = data.get("current_watch_time", 0)
-            time_before_jump = data.get("time_before_jump", 0)
+            current_time = data.get("current_time", 0.0)
 
             # Check if a watch item already exists for (user_id, video_id).
             cur.execute(
@@ -46,10 +45,10 @@ def log_watch(user_id, data):
                 # Insert a new watch item
                 cur.execute(
                     '''INSERT INTO "Watch_Item"
-                       (user_id, video_id, current_watch_time, time_before_jump, last_updated)
-                       VALUES (%s, %s, %s, %s, NOW())
+                       (user_id, video_id, current_time, last_updated)
+                       VALUES (%s, %s, %s, NOW())
                        RETURNING watch_item_id''',
-                    (user_id, video_id, current_watch_time, time_before_jump)
+                    (user_id, video_id, current_time)
                 )
                 watch_item_id = cur.fetchone()[0]
             else:
@@ -57,11 +56,10 @@ def log_watch(user_id, data):
                 watch_item_id = row[0]
                 cur.execute(
                     '''UPDATE "Watch_Item"
-                       SET current_watch_time = %s,
-                           time_before_jump = %s,
+                       SET current_time = %s,
                            last_updated = NOW()
                        WHERE watch_item_id = %s''',
-                    (current_watch_time, time_before_jump, watch_item_id)
+                    (current_time, watch_item_id)
                 )
 
             return {
@@ -107,7 +105,7 @@ def get_watch_item(user_id, data):
                 return {"status": "failed", "reason": "Missing video_id"}, 400
 
             cur.execute(
-                '''SELECT watch_item_id, current_watch_time, time_before_jump, last_updated
+                '''SELECT watch_item_id, current_time, last_updated
                    FROM "Watch_Item"
                    WHERE user_id = %s AND video_id = %s''',
                 (user_id, video_id)
@@ -117,14 +115,13 @@ def get_watch_item(user_id, data):
             if row is None:
                 return {"status": "failed", "reason": "Watch item not found"}, 404
 
-            watch_item_id, current_watch_time, time_before_jump, last_updated = row
+            watch_item_id, current_time, last_updated = row
             return {
                 "status": "success",
                 "watch_item": {
                     "watch_item_id": watch_item_id,
                     "video_id": video_id,
-                    "current_watch_time": current_watch_time,
-                    "time_before_jump": time_before_jump,
+                    "current_time": current_time,
                     "last_updated": str(last_updated) if last_updated else None
                 }
             }, 200

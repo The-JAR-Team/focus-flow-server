@@ -44,6 +44,7 @@ def watch_log_watch():
     {
         "youtube_id": <string>,          # YouTube video ID
         "current_time": <float>,       # Current playback time in seconds
+        "save_time": <float>,        # Time to save the watch item optional
         "extraction": <string>,        # Extraction method (e.g., "mediapipe")
         "extraction_payload": <dict>,  # Payload for the extraction method
     }
