@@ -85,8 +85,10 @@ def get_video_questions(youtube_id):
     """
     # Authenticate user using session cookie.
     message, user_id, status = get_authenticated_user()
+    if status != 200:
+        return message, status
 
-    if status == 200:
+    else:
         message, status = check_authenticated_video(youtube_id, user_id)
 
         if status == 200:

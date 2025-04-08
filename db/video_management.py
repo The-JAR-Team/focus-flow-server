@@ -46,7 +46,7 @@ def upload_video(data, user_id):
         # Insert the new video into the Video table.
         # Note: the "length" column is of type INTERVAL, so we cast the string.
         cur.execute("""
-            INSERT INTO "Video" (name, description, subject_name, added_date, youtube_id, upload_by, length)
+            INSERT INTO "Video" (name, description, subject_name, added_date, youtube_id, upload_by, "length")
             VALUES (%s, %s, %s, NOW(), %s, %s, %s::interval)
             RETURNING video_id
         """, (video_name, description, subject, youtube_video_id, uploadby, length_str))
@@ -149,7 +149,7 @@ def update_video_details(data, user_id):
                 subject_name = %s,
                 youtube_id = %s,
                 upload_by = %s,
-                length = %s::interval
+                "length" = %s::interval
             WHERE video_id = %s
         """, (video_name, description, subject, youtube_id, uploadby, length_str, video_pk))
 
@@ -192,8 +192,7 @@ def get_accessible_videos(user_id):
               "length": <interval string?>,
               "watch_item": {
                 "watch_item_id": <int>,
-                "current_watch_time": <int>,
-                "time_before_jump": <int>,
+                "current_time": <int>,
                 "last_updated": <timestamp>
               } OR null if not found
             }, ...
@@ -230,9 +229,9 @@ def get_accessible_videos(user_id):
                   v.subject_name AS subject,
                   v.youtube_id AS external_id,
                   v.upload_by,
-                  v.length,
+                  v."length",
                   w.watch_item_id,
-                  w.current_time,
+                  w."current_time",
                   w.last_updated,
                   v.added_date
                 FROM accessible_playlists a
