@@ -87,6 +87,12 @@ def watch_log_watch():
                     if model is not None:
                         if model.lower() == "basic":
                             RuleBasedModel(message)
+                            message = {
+                                "status": "success",
+                                "message": f"Basic model is not ready yet, but this is how the payload would look like.",
+                                "model_result": 1.0
+                            }
+                            status = 200
 
         else:
             # Unsupported extraction method
