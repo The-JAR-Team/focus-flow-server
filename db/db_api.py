@@ -345,9 +345,6 @@ def get_all_videos_user_can_access(user_id):
 
     Args:
         user_id (int): The ID of the authenticated user.
-
-    Returns:
-        tuple: (response_dict, http_status_code)
     """
     return get_accessible_videos(user_id)
 
@@ -424,6 +421,7 @@ def logout_user(session_id):
 
 from db import subscription_management
 
+
 def get_playlist_subscribers(owner_id, playlist_id):
     """
     Retrieves subscriber emails for a playlist by delegating to
@@ -466,3 +464,32 @@ def get_playlist_subscriber_count(owner_id, playlist_id):
               { "status": "failed", "reason": <error message> }
     """
     return playlists_management.get_playlist_subscriber_count(owner_id, playlist_id)
+
+
+def process_mediapipe_data(watch_item_id, current_time, extraction_payload):
+    """
+    Processes and stores facial landmark extraction data from mediapipe.
+
+    Args:
+        watch_item_id (int): The ID of the watch item
+        user_id (int): The ID of the user
+        current_time (float): The current time in the video (will be used as stop_time)
+        extraction_payload (dict): Contains the extraction data with format:
+            {
+                "fps": int,                # Frames per second
+                "interval": int,           # Time interval in seconds
+                "number_of_landmarks": int,  # Number of landmarks per frame
+                "landmarks": array         # Array of landmark data
+            }
+
+    Returns:
+        tuple: (response_dict, status_code)
+            Example success:
+              {
+                "status": "success",
+                "watch_data_id": int,
+                "log_data_id": int,
+                "message": "Extraction data processed successfully"
+              }, 200
+    """
+    return watch_management.process_mediapipe_data(watch_item_id, current_time, extraction_payload)

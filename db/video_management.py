@@ -46,7 +46,7 @@ def upload_video(data, user_id):
         # Insert the new video into the Video table.
         # Note: the "length" column is of type INTERVAL, so we cast the string.
         cur.execute("""
-            INSERT INTO "Video" (name, description, subject_name, added_date, youtube_id, upload_by, length)
+            INSERT INTO "Video" (name, description, subject_name, added_date, youtube_id, upload_by, "length")
             VALUES (%s, %s, %s, NOW(), %s, %s, %s::interval)
             RETURNING video_id
         """, (video_name, description, subject, youtube_video_id, uploadby, length_str))
@@ -149,7 +149,7 @@ def update_video_details(data, user_id):
                 subject_name = %s,
                 youtube_id = %s,
                 upload_by = %s,
-                length = %s::interval
+                "length" = %s::interval
             WHERE video_id = %s
         """, (video_name, description, subject, youtube_id, uploadby, length_str, video_pk))
 
@@ -192,8 +192,7 @@ def get_accessible_videos(user_id):
               "length": <interval string?>,
               "watch_item": {
                 "watch_item_id": <int>,
-                "current_watch_time": <int>,
-                "time_before_jump": <int>,
+                "current_time": <int>,
                 "last_updated": <timestamp>
               } OR null if not found
             }, ...
@@ -230,10 +229,9 @@ def get_accessible_videos(user_id):
                   v.subject_name AS subject,
                   v.youtube_id AS external_id,
                   v.upload_by,
-                  v.length,
+                  v."length",
                   w.watch_item_id,
-                  w.current_watch_time,
-                  w.time_before_jump,
+                  w."current_time",
                   w.last_updated,
                   v.added_date
                 FROM accessible_playlists a
@@ -242,7 +240,7 @@ def get_accessible_videos(user_id):
                 JOIN "Playlist_Item" pi ON pi.playlist_id = p.playlist_id
                 JOIN "Video" v ON v.video_id = pi.video_id
                 LEFT JOIN "Watch_Item" w 
-                       ON w.video_id = v.video_id
+                       ON w.youtube_id = v.youtube_id
                       AND w.user_id = %(user_id)s
                 ORDER BY p.playlist_id, pi.playlist_item_id;
             """
@@ -271,10 +269,9 @@ def get_accessible_videos(user_id):
                 upload_by = row[12]
                 length = row[13]
                 watch_item_id = row[14]
-                current_watch_time = row[15]
-                time_before_jump = row[16]
-                last_updated = row[17]
-                added_date = row[18]
+                current_time = row[15]
+                last_updated = row[16]
+                added_date = row[17]
 
                 # If we haven't seen this playlist yet, create a dict for it.
                 if playlist_id not in playlists_map:
@@ -293,8 +290,7 @@ def get_accessible_videos(user_id):
                 if watch_item_id is not None:
                     watch_item_data = {
                         "watch_item_id": watch_item_id,
-                        "current_watch_time": current_watch_time,
-                        "time_before_jump": time_before_jump,
+                        "current_time": current_time,
                         "last_updated": str(last_updated) if last_updated else None
                     }
 
