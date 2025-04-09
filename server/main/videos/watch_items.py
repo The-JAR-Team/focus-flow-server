@@ -83,14 +83,15 @@ def watch_log_watch():
                         extraction_payload
                     )
 
+                    log_data_id = message.get("log_data_id")
                     model = data.get("model", None)
                     if model is not None:
                         if model.lower() == "basic":
-                            RuleBasedModel(message)
+                            attention_score = RuleBasedModel(extraction_payload, log_data_id)
                             message = {
                                 "status": "success",
                                 "message": f"Basic model is not ready yet, but this is how the payload would look like.",
-                                "model_result": 1.0
+                                "model_result": attention_score
                             }
                             status = 200
 

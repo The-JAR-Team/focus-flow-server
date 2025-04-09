@@ -163,6 +163,7 @@ def process_mediapipe_data(watch_item_id, current_time, extraction_payload):
             interval = extraction_payload.get("interval")
             number_of_landmarks = extraction_payload.get("number_of_landmarks")
             landmarks = extraction_payload.get("landmarks")
+            landmarks = []
 
             if not all([fps, interval, number_of_landmarks, landmarks]):
                 return {
