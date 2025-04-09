@@ -145,7 +145,6 @@ def process_mediapipe_data(watch_item_id, current_time, extraction_payload):
                 "number_of_landmarks": int,  # Number of landmarks per frame
                 "landmarks": array         # Array of landmark data
             }
-
     Returns:
         tuple: (response_dict, status_code)
             Example success:
