@@ -161,10 +161,8 @@ def process_mediapipe_data(watch_item_id, current_time, extraction_payload):
             fps = extraction_payload.get("fps")
             interval = extraction_payload.get("interval")
             number_of_landmarks = extraction_payload.get("number_of_landmarks")
-            landmarks = extraction_payload.get("landmarks")
-            landmarks = []
 
-            if not all([fps, interval, number_of_landmarks, landmarks]):
+            if not all([fps, interval, number_of_landmarks]):
                 return {
                     "status": "failed",
                     "message": "Missing required fields in extraction payload"
@@ -186,10 +184,10 @@ def process_mediapipe_data(watch_item_id, current_time, extraction_payload):
             # Using JSONB for storing landmarks
             cur.execute(
                 '''INSERT INTO "Log_Data"
-                   (watch_data_id, fps_num, extraction_type, fps_log)
+                   (watch_data_id, fps_num, extraction_type)
                    VALUES (%s, %s, %s, %s)
                    RETURNING log_data_id''',
-                (watch_data_id, fps, extraction_type, json.dumps(landmarks))
+                (watch_data_id, fps, extraction_type)
             )
             log_data_id = cur.fetchone()[0]
 

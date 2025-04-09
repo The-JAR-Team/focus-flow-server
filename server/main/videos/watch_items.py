@@ -103,4 +103,5 @@ def watch_log_watch():
             }
             status = 400
 
+    print(data.get("current_time", 0.0))
     return jsonify(message), status
