@@ -1,4 +1,5 @@
 from db.DB import DB
+import psycopg2
 
 
 def create_playlist(user_id, playlist_name, playlist_permission='unlisted'):
@@ -243,56 +244,60 @@ def update_playlist_name(user_id, data):
 
 def get_playlist_subscribers(owner_id, playlist_id):
     """
-    Retrieves a list of subscriber emails for the specified playlist_id,
-    only if owner_id matches the playlist's user_id.
+    Retrieves subscriber details (email, full name) for a playlist,
+    verifying ownership first.
 
     Args:
-        owner_id (int): The ID of the user who owns the playlist.
+        owner_id (int): The ID of the user claiming ownership.
         playlist_id (int): The ID of the target playlist.
 
     Returns:
-        tuple: (response_dict, http_status_code)
-            - On success:
-                {
-                  "status": "success",
-                  "subscribers": [ "email1@example.com", "email2@example.com", ... ]
-                }
-            - On failure:
-                { "status": "failed", "reason": <error message> }
+        tuple: (response_dict, http_status_code) as described previously.
     """
     try:
-        conn = DB.get_connection()
-        cur = conn.cursor()
+        with DB.get_cursor() as cur:
+            # Verify ownership
+            cur.execute('SELECT user_id FROM "Playlist" WHERE playlist_id = %s', (playlist_id,))
+            row = cur.fetchone()
+            if row is None:
+                # No commit/rollback needed here as it's a read and context manager handles errors
+                return {"status": "failed", "reason": "Playlist not found"}, 404
 
-        # Verify that the playlist belongs to the owner_id
-        cur.execute('SELECT user_id FROM "Playlist" WHERE playlist_id = %s', (playlist_id,))
-        row = cur.fetchone()
-        if row is None:
-            return {"status": "failed", "reason": "Playlist not found"}, 404
+            if row[0] != owner_id:
+                return {"status": "failed", "reason": "Not authorized"}, 403
 
-        playlist_owner = row[0]
-        if playlist_owner != owner_id:
-            return {"status": "failed", "reason": "Not authorized to view subscribers for this playlist"}, 403
+            # Retrieve subscribers
+            cur.execute(
+                '''
+                SELECT u.email, u.first_name, u.last_name
+                FROM "Subscription" s
+                JOIN "User" u ON s.user_id = u.user_id
+                WHERE s.playlist_id = %s
+                ''',
+                (playlist_id,)
+            )
+            rows = cur.fetchall()
 
-        # Retrieve subscriber emails by joining the Subscription and User tables
-        cur.execute(
-            '''
-            SELECT u.email
-            FROM "Subscription" s
-            JOIN "User" u ON s.user_id = u.user_id
-            WHERE s.playlist_id = %s
-            ''',
-            (playlist_id,)
-        )
-        rows = cur.fetchall()
-
-        subscribers = [r[0] for r in rows]
+            subscribers = [
+                {
+                    "email": r[0],
+                    "full_name": f"{r[1] or ''} {r[2] or ''}".strip()
+                }
+                for r in rows
+            ]
+            # Commit happens automatically on successful exit of 'with' block
 
         return {"status": "success", "subscribers": subscribers}, 200
 
-    except Exception as e:
-        print("Error in get_playlist_subscribers:", e)
-        return {"status": "failed", "reason": str(e)}, 500
+    except psycopg2.Error as db_err: # Catch specific DB errors
+        print(f"Database error in get_playlist_subscribers: {db_err}")
+        # Rollback happens automatically due to exception in 'with' block
+        return {"status": "failed", "reason": f"Database error: {db_err}"}, 500
+    except Exception as e: # Catch any other errors
+        print(f"Error in get_playlist_subscribers: {e}")
+        # Rollback happens automatically due to exception in 'with' block
+        return {"status": "failed", "reason": f"An unexpected error occurred: {e}"}, 500
+    # No finally block needed for cursor/connection handling
 
 
 def get_playlist_subscriber_count(owner_id, playlist_id):
