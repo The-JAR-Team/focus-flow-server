@@ -1,5 +1,7 @@
 from flask import Blueprint, request, jsonify
-from db.db_api import log_watch_item, get_watch_item, get_all_videos_user_can_access, process_mediapipe_data
+
+from db.buffer_manager import BufferManager
+from db.db_api import log_watch_item, get_watch_item, process_mediapipe_data
 from logic.RuleBasedModel import RuleBasedModel
 from server.main.utils import get_authenticated_user, check_authenticated_video
 
@@ -105,3 +107,180 @@ def watch_log_watch():
 
     print(data.get("current_time", 0.0))
     return jsonify(message), status
+
+
+@watch_items_bp.route('/watch/log_watch2', methods=['POST'])
+def watch_log_watch2():
+    """
+    Logs watch data with facial landmark extraction data.
+
+    Expected JSON payload:
+    {
+        "youtube_id": <string>,        # YouTube video ID
+        "current_time": <float>,       # Current playback time in seconds
+        "extraction": <string>,        # Extraction method (e.g., "mediapipe")
+        "extraction_payload": <json>,  # Payload for the extraction method
+        "model": <string>,             # Model used for extraction (optional)
+        "del_buffer": <boolean>        # Whether to clear buffer before adding new data (optional)
+    }
+
+    Returns:
+        JSON response indicating success or failure
+    """
+    # Initialize response variables
+    message = {}
+    status_code = 200
+
+    try:
+        # Authentication check
+        resp, user_id, status = get_authenticated_user()
+        if resp is not None:
+            return resp, status
+
+        data = request.get_json()
+        youtube_id = data.get("youtube_id")
+
+        # Check video authentication
+        auth_message, auth_status = check_authenticated_video(youtube_id, user_id)
+        if auth_status != 200:
+            message = auth_message
+            status_code = auth_status
+            return jsonify(message), status_code
+
+        # Validate extraction method
+        extraction_method = data.get("extraction", "None")
+        extraction_payload = data.get("extraction_payload")
+
+        if extraction_method == "None":
+            message = {
+                "status": "failed",
+                "message": "An extraction method must be specified"
+            }
+            status_code = 400
+            return jsonify(message), status_code
+
+        if extraction_method.lower() != "mediapipe":
+            message = {
+                "status": "failed",
+                "message": f"The extraction method '{extraction_method}' is not supported"
+            }
+            status_code = 400
+            return jsonify(message), status_code
+
+        if not extraction_payload:
+            message = {
+                "status": "failed",
+                "message": "Missing extraction payload"
+            }
+            status_code = 400
+            return jsonify(message), status_code
+
+        # Get current video time
+        video_time = data.get("current_time", 0.0)
+
+        # Log the watch event to get log_data_id
+        log_result, log_status = log_watch_item(user_id, {
+            "youtube_id": youtube_id,
+            "current_time": video_time
+        })
+
+        if log_status != 200:
+            message = log_result
+            status_code = log_status
+            return jsonify(message), status_code
+
+        watch_item_id = log_result.get("watch_item_id")
+
+        # Process the mediapipe data to get log_data_id
+        mediapipe_result, mediapipe_status = process_mediapipe_data(
+            watch_item_id,
+            video_time,
+            extraction_payload
+        )
+
+        if mediapipe_status != 200:
+            message = mediapipe_result
+            status_code = mediapipe_status
+            return jsonify(message), status_code
+
+        log_data_id = mediapipe_result.get("log_data_id")
+
+        # Check if we should clear the buffer
+        del_buffer = data.get("del_buffer", False)
+        deleted_frames = 0
+        if del_buffer:
+            deleted_frames = BufferManager.clear_buffer(user_id, youtube_id)
+
+        # Store frame in buffer
+        buffer_info = BufferManager.store_frame(
+            user_id, youtube_id, video_time, extraction_payload
+        )
+
+        # Add deleted frames info to buffer_info
+        buffer_info["deleted_frames"] = deleted_frames
+
+        # Check if model processing was requested
+        model = data.get("model")
+
+        if model and model.lower() == "basic":
+            # Get frames for processing
+            landmarks_list, fps, time_span = BufferManager.get_frames_for_processing(
+                user_id, youtube_id
+            )
+
+            if landmarks_list:
+                # Create payload for attention model
+                model_payload = {
+                    "fps": fps,
+                    "interval": 10,  # We're using exactly 10 seconds
+                    "landmarks": landmarks_list
+                }
+
+                # Process with attention model - pass the log_data_id
+                attention_score = RuleBasedModel(model_payload, log_data_id)
+
+                message = {
+                    "status": "success",
+                    "message": "Successfully processed attention data",
+                    "model_result": attention_score,
+                    "log_data_id": log_data_id,
+                    "frames_processed": len(landmarks_list),
+                    "time_span": time_span,
+                    "frames_in_buffer": buffer_info["frame_count"],
+                    "buffer_cleared": del_buffer,
+                    "deleted_frames": deleted_frames
+                }
+            else:
+                print(landmarks_list)
+                # Not enough data yet
+                message = {
+                    "status": "buffering",
+                    "message": f"Buffering data, {buffer_info['time_span_sec']:.1f} seconds collected so far",
+                    "log_data_id": log_data_id,
+                    "frames_in_buffer": buffer_info["frame_count"],
+                    "time_span": buffer_info["time_span_sec"],
+                    "buffer_cleared": del_buffer,
+                    "deleted_frames": deleted_frames
+                }
+        else:
+            # No model requested, just return success for storage
+            message = {
+                "status": "success",
+                "message": "Frame data stored successfully",
+                "log_data_id": log_data_id,
+                "frames_in_buffer": buffer_info["frame_count"],
+                "time_span": buffer_info["time_span_sec"],
+                "buffer_cleared": del_buffer,
+                "deleted_frames": deleted_frames
+            }
+
+    except Exception as e:
+        # Catch all exceptions and return a unified error message
+        message = {
+            "status": "error",
+            "message": f"An error occurred: {str(e)}"
+        }
+        status_code = 500
+
+    # Single return point for all cases
+    return jsonify(message), status_code

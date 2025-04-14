@@ -142,7 +142,6 @@ def process_mediapipe_data(watch_item_id, current_time, extraction_payload):
             {
                 "fps": int,                # Frames per second
                 "interval": int,           # Time interval in seconds
-                "number_of_landmarks": int,  # Number of landmarks per frame
                 "landmarks": array         # Array of landmark data
             }
     Returns:
@@ -160,9 +159,8 @@ def process_mediapipe_data(watch_item_id, current_time, extraction_payload):
             # Extract data from payload
             fps = extraction_payload.get("fps")
             interval = extraction_payload.get("interval")
-            number_of_landmarks = extraction_payload.get("number_of_landmarks")
 
-            if not all([fps, interval, number_of_landmarks]):
+            if not all([fps, interval]):
                 return {
                     "status": "failed",
                     "message": "Missing required fields in extraction payload"
@@ -179,13 +177,13 @@ def process_mediapipe_data(watch_item_id, current_time, extraction_payload):
             watch_data_id = cur.fetchone()[0]
 
             # Next, create a Log_Data entry with landmarks stored as JSONB
-            extraction_type = f"mediapipe:{number_of_landmarks}"
+            extraction_type = f"mediapipe"
 
             # Using JSONB for storing landmarks
             cur.execute(
                 '''INSERT INTO "Log_Data"
                    (watch_data_id, fps_num, extraction_type)
-                   VALUES (%s, %s, %s, %s)
+                   VALUES (%s, %s, %s)
                    RETURNING log_data_id''',
                 (watch_data_id, fps, extraction_type)
             )
