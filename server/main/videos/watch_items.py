@@ -4,6 +4,31 @@ from db.buffer_manager import BufferManager
 from db.db_api import log_watch_item, get_watch_item, process_mediapipe_data
 from logic.RuleBasedModel import RuleBasedModel
 from server.main.utils import get_authenticated_user, check_authenticated_video
+try:
+    # Adjust this path based on your project structure
+    # Assumes model_test.py is inside logic/Models/ relative to where Flask runs
+    from logic.model_test import (
+        loaded_model,                   # The globally loaded model instance
+        predict_engagement_dnn,         # The prediction function
+        IDX_TO_NAME_MAP,                # Helper to map index -> class name
+        DEVICE                          # The device the model is loaded on
+    )
+    # Check if the model actually loaded during import
+    MODEL_V1_LOADED = loaded_model is not None
+    if not MODEL_V1_LOADED:
+         print("Warning: DNN Model v1 was imported but reported as not loaded.")
+
+except ImportError as e:
+    print(f"ERROR: Could not import components from logic.Models.model_test: {e}")
+    print("       DNN model 'v1' will be unavailable.")
+    loaded_model = None
+    predict_engagement_dnn = None
+    map_score_to_class_idx = None
+    IDX_TO_NAME_MAP = {}
+    MODEL_V1_LOADED = False
+except NameError as e: # Catch if torch itself failed to import in model_test
+     print(f"ERROR: NameError during import from logic.Models.model_test (likely PyTorch issue): {e}")
+     MODEL_V1_LOADED = False # Ensure flag is False
 
 watch_items_bp = Blueprint('watch_items', __name__)
 
@@ -96,6 +121,34 @@ def watch_log_watch():
                                 "model_result": attention_score
                             }
                             status = 200
+                        elif model.lower() == "v1":
+                            print("Running DNN Model v1...")
+                            if not MODEL_V1_LOADED or predict_engagement_dnn is None:
+                                # Check if the model failed to load when the server started
+                                message = {"status": "failed",
+                                                 "message": "Model v1 is not available on the server."}
+                                status = 503  # Service Unavailable
+                            else:
+                                # Call the imported prediction function with the globally loaded model
+                                predicted_score = predict_engagement_dnn(
+                                    extraction_payload=extraction_payload,
+                                    model=loaded_model,  # Pass the loaded model instance
+                                    device=DEVICE  # Pass the device it's loaded on
+                                )
+
+                                if predicted_score is not None:
+                                    # --- Prediction successful ---
+                                    message = {
+                                        "status": "success",
+                                        "message": "DNN Model v1 prediction successful.",
+                                        "model_name": "DNN_v1",
+                                        "model_result_score": predicted_score,
+                                    }
+                                    status = 200
+                                else:
+                                    # --- Prediction failed ---
+                                    message = {"status": "failed", "message": "DNN Model v1 prediction failed."}
+                                    status = 500  # Internal Server Error
 
         else:
             # Unsupported extraction method
