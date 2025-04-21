@@ -133,16 +133,18 @@ def watch_log_watch():
                                 predicted_score = predict_engagement_dnn(
                                     extraction_payload=extraction_payload,
                                     model=loaded_model,  # Pass the loaded model instance
-                                    device=DEVICE  # Pass the device it's loaded on
+                                    device=DEVICE,  # Pass the device it's loaded on
+                                    log_data_id=log_data_id
                                 )
 
                                 if predicted_score is not None:
                                     # --- Prediction successful ---
+                                    print(f"Predicted score: {predicted_score}")
                                     message = {
                                         "status": "success",
                                         "message": "DNN Model v1 prediction successful.",
                                         "model_name": "DNN_v1",
-                                        "model_result_score": predicted_score,
+                                        "model_result": predicted_score,
                                     }
                                     status = 200
                                 else:
@@ -158,7 +160,6 @@ def watch_log_watch():
             }
             status = 400
 
-    print(data.get("current_time", 0.0))
     return jsonify(message), status
 
 

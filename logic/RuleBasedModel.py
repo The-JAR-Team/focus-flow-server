@@ -67,7 +67,7 @@ def RuleBasedModel(extraction_payload, log_data_id):
         attention_score = calculate_attention_score(landmarks, fps, interval)
 
         # Uncomment to store the result to DB:
-        # store_model_result(log_data_id, "RuleBasedModel", attention_score)
+        store_model_result(log_data_id, "RuleBasedModel", attention_score)
 
         return attention_score
 

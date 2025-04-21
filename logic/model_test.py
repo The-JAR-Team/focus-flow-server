@@ -4,6 +4,8 @@ import torch.nn as nn
 import numpy as np
 from typing import Optional, List, Dict, Any
 
+from logic.RuleBasedModel import store_model_result
+
 # ================================================
 # === Configuration ===
 # ================================================
@@ -116,119 +118,93 @@ loaded_model = load_engagement_model(MODEL_WEIGHTS_PATH, DEVICE)
 # ================================================
 
 def get_frame_landmarks_from_raw(frame_data: Any) -> Optional[List[Dict]]:
-    """
-    Extracts the list of landmark dicts {'x':..,'y':..,'z':..} from potentially nested frame data.
-    Returns None if extraction fails or data is invalid.
-    """
-    landmarks_list = None # Default return value
+    """ Extracts list of landmark dicts {'x':..,'y':..,'z':..} from frame data. """
+    landmarks_list = None
     try:
-        # Case 1: Data might be directly the list of landmarks (e.g., [ {'x':..}, ... ] )
-        if isinstance(frame_data, list) and len(frame_data) > 0 and isinstance(frame_data[0], dict):
-            landmarks_list = frame_data
-        # Case 2: Data might be nested [[ {'x':..}, ... ]] (like rule-based handled)
-        elif isinstance(frame_data, list) and len(frame_data) == 1 and isinstance(frame_data[0], list):
-             inner_list = frame_data[0]
-             if inner_list and isinstance(inner_list[0], dict):
-                 landmarks_list = inner_list
-        # Add other potential parsing logic here if needed
+        # (Extraction logic for Case 1 and Case 2 remains the same)
+        if isinstance(frame_data, list) and len(frame_data) > 0:
+            if isinstance(frame_data[0], dict): # Case 1
+                landmarks_list = frame_data
+            elif isinstance(frame_data[0], list): # Case 2
+                 inner_list = frame_data[0]
+                 if inner_list and isinstance(inner_list[0], dict):
+                     landmarks_list = inner_list
 
-        # Basic validation
-        if landmarks_list and len(landmarks_list) == NUM_LANDMARKS:
-             # Check if first landmark looks like a dict with coords (optional deeper check)
-             if isinstance(landmarks_list[0], dict) and 'x' in landmarks_list[0] and 'y' in landmarks_list[0] and 'z' in landmarks_list[0]:
-                  return landmarks_list # Return valid list
-             else:
-                 # print(f"Warning: Landmark format unexpected: {landmarks_list[0]}")
-                 landmarks_list = None # Reset if format invalid
-        # else:
-             # print(f"Warning: Frame data invalid or wrong landmark count ({len(landmarks_list) if landmarks_list else 0} vs {NUM_LANDMARKS})")
-             # landmarks_list is already None or will be set to None
+        # Validation
+        if landmarks_list is not None:
+            if len(landmarks_list) == NUM_LANDMARKS: # Check EXACT Count
+                 if isinstance(landmarks_list[0], dict) and 'x' in landmarks_list[0]: # Basic Format check
+                      pass # Valid - will return landmarks_list below
+                 else:
+                     landmarks_list = None # Invalid format
+            else: # Landmark count mismatch
+                 landmarks_list = None # Failed Count check
 
     except Exception as e:
-        # print(f"Error parsing frame data: {e}") # Can be noisy
         landmarks_list = None
 
-    return landmarks_list # Return None if any check failed
+    return landmarks_list
 
 
 def preprocess_landmarks_for_model(
-    landmarks_sequence: List[Any], # List of frames, format from extraction_payload
+    landmarks_sequence: List[Any],
     seq_len: int = SEQ_LEN,
     num_landmarks: int = NUM_LANDMARKS,
     num_coords: int = NUM_COORDS,
     device: torch.device = DEVICE
     ) -> Optional[torch.Tensor]:
-    """
-    Preprocesses a sequence of raw landmark frames into a tensor for the model.
-    Handles nesting, padding/truncating, and tensor conversion.
-
-    Returns:
-        Tensor of shape [1, seq_len, num_landmarks * num_coords] or None if error.
-    """
-    processed_tensor = None # Initialize return variable
+    """ Preprocesses raw landmark sequence into a tensor for the model. """
+    processed_tensor = None
     tensor_frames = []
     valid_frames_count = 0
 
-    # 1. Extract landmarks frame by frame, handle placeholders
-    for frame_data in landmarks_sequence:
+    # 1. Extract and create frame tensors (or placeholders)
+    for idx, frame_data in enumerate(landmarks_sequence):
         single_frame_landmarks = get_frame_landmarks_from_raw(frame_data)
+        frame_tensor = torch.zeros((num_landmarks, num_coords), dtype=torch.float32) # Default placeholder
 
-        if single_frame_landmarks is not None and len(single_frame_landmarks) == num_landmarks:
+        if single_frame_landmarks is not None:
             try:
-                # Convert list of dicts to numpy array [num_landmarks, num_coords]
-                frame_array = np.array([[lm['x'], lm['y'], lm['z']] for lm in single_frame_landmarks], dtype=np.float32)
-                tensor_frames.append(torch.from_numpy(frame_array))
+                frame_array = np.array(
+                    [[lm.get('x', 0.0), lm.get('y', 0.0), lm.get('z', 0.0)]
+                     for lm in single_frame_landmarks],
+                    dtype=np.float32
+                )
+                frame_tensor = torch.from_numpy(frame_array)
                 valid_frames_count += 1
-            except (KeyError, TypeError, Exception) as e:
-                # print(f"Warning: Error converting frame to tensor: {e}. Using placeholder.")
-                tensor_frames.append(torch.zeros((num_landmarks, num_coords), dtype=torch.float32)) # Placeholder
-        else:
-            # Use placeholder for missing/invalid frames
-            # print("Warning: Using placeholder for invalid/missing frame.")
-            tensor_frames.append(torch.zeros((num_landmarks, num_coords), dtype=torch.float32)) # Placeholder
+            except Exception as e:
+                print(f"Warn: Error converting frame {idx} to tensor: {e}. Using placeholder.")
+                frame_tensor = torch.zeros((num_landmarks, num_coords), dtype=torch.float32)
+
+        tensor_frames.append(frame_tensor)
 
     if valid_frames_count == 0:
-        print("Warning: No valid frames found in the input sequence.")
-        # Still return a tensor of zeros? Or None? Let's return zeros for consistency.
-        # If you want to signal no prediction possible, return None here.
-        pass # Proceed to padding/truncating zero tensor
+        print("Warning: No valid frames found in the input sequence. Proceeding with zero tensor.")
 
     # 2. Pad or Truncate sequence
     current_len = len(tensor_frames)
     if current_len < seq_len:
-        # Pad with placeholder frames at the end
         padding_count = seq_len - current_len
         padding = [torch.zeros((num_landmarks, num_coords), dtype=torch.float32) for _ in range(padding_count)]
         tensor_frames.extend(padding)
-        # print(f"Padded sequence with {padding_count} frames.")
     elif current_len > seq_len:
-        # Truncate (keep the last `seq_len` frames)
         tensor_frames = tensor_frames[-seq_len:]
-        # print(f"Truncated sequence to last {seq_len} frames.")
 
-    # 3. Stack frames into a single tensor [seq_len, num_landmarks, num_coords]
+    # 3. Stack, Flatten, Add Batch Dim, Move to Device
     try:
         sequence_tensor = torch.stack(tensor_frames, dim=0)
-    except Exception as e:
-        print(f"Error stacking frame tensors: {e}")
-        return processed_tensor # Return None
 
-    # 4. Reshape/Flatten for the model [seq_len, num_landmarks * num_coords]
-    try:
-        # Reshape directly to [seq_len, features]
         sequence_tensor_flat = sequence_tensor.reshape(seq_len, -1)
-        # Check final feature dim
+
         if sequence_tensor_flat.shape[1] != (num_landmarks * num_coords):
              print(f"Error: Unexpected feature dimension after reshape: {sequence_tensor_flat.shape[1]}")
-             return processed_tensor # Return None
+             return None
 
-        # 5. Add batch dimension [1, seq_len, features]
         processed_tensor = sequence_tensor_flat.unsqueeze(0).to(device)
 
     except Exception as e:
-        print(f"Error reshaping or moving tensor to device: {e}")
-        processed_tensor = None # Ensure None is returned on error
-
+        print(f"Error during final tensor processing: {e}")
+        processed_tensor = None
 
     return processed_tensor
 # ================================================
@@ -240,7 +216,8 @@ def preprocess_landmarks_for_model(
 def predict_engagement_dnn(
     extraction_payload: Dict[str, Any],
     model: nn.Module,
-    device: torch.device
+    device: torch.device,
+    log_data_id: int,
     ) -> Optional[float]:
     """
     Runs inference using the loaded DNN model on data from extraction_payload.
@@ -270,7 +247,7 @@ def predict_engagement_dnn(
         print("Error: 'landmarks' data is not a list.")
         return predicted_score
 
-    # 1. Preprocess landmarks into the expected tensor format
+
     input_tensor = preprocess_landmarks_for_model(landmarks_raw, device=device)
 
     if input_tensor is None:
@@ -289,6 +266,8 @@ def predict_engagement_dnn(
     except Exception as e:
         print(f"Error during model inference: {e}")
         predicted_score = 0 # Set to None on error
+
+    store_model_result(log_data_id, "v1", predicted_score) # Store the result in the database
 
     return predicted_score
 # ================================================
