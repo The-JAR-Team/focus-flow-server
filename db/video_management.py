@@ -213,7 +213,9 @@ def get_accessible_videos(user_id):
                     UNION
                     SELECT s.playlist_id
                       FROM "Subscription" s
+                      JOIN "Playlist" pl ON pl.playlist_id = s.playlist_id
                      WHERE s.user_id = %(user_id)s
+                       AND pl.permission = 'private'
                 )
                 SELECT
                   p.playlist_id,
