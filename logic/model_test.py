@@ -1,6 +1,6 @@
 import os
-import torch
-import torch.nn as nn
+import time
+import onnxruntime
 import numpy as np
 from typing import Optional, List, Dict, Any
 
@@ -9,16 +9,15 @@ from logic.RuleBasedModel import store_model_result
 # ================================================
 # === Configuration ===
 # ================================================
-# --- Model Architecture Parameters (MUST MATCH TRAINING) ---
+# --- Model Input/Output Parameters (MUST MATCH ONNX MODEL EXPORT) ---
+# These are less critical for loading the ONNX model itself, but crucial
+# for ensuring the preprocessing creates data of the correct shape.
 SEQ_LEN = 100        # Sequence length the model expects
 NUM_LANDMARKS = 478  # Number of landmarks per frame
 NUM_COORDS = 3       # Number of coordinates per landmark (x, y, z)
-INPUT_DIM = NUM_LANDMARKS * NUM_COORDS # 478 * 3 = 1434
-HIDDEN_DIM = 256     # GRU hidden dimension used during training
-NUM_GRU_LAYERS = 2   # Number of GRU layers used during training
-DROPOUT_RATE = 0.4   # Dropout rate used during training (doesn't affect eval)
-BIDIRECTIONAL_GRU = True # Whether bidirectional GRU was used
-OUTPUT_DIM = 1       # Single score output for regression
+INPUT_DIM = NUM_LANDMARKS * NUM_COORDS # 478 * 3 = 1434 - Used in preprocessing validation
+
+# --- Mappings (Still needed for interpreting output if required later) ---
 LABEL_TO_IDX_MAP = {
     'Not Engaged': 0, 'Barely Engaged': 1, 'Engaged': 2, 'Highly Engaged': 3,
     'not engaged': 0, 'not-engaged': 0, 'Not-Engaged': 0,
@@ -30,68 +29,72 @@ IDX_TO_SCORE_MAP = {4: 0.0, 0: 0.25, 1: 0.5, 2: 0.75, 3: 1.0}
 IDX_TO_NAME_MAP = {0: 'Not Engaged', 1: 'Barely Engaged', 2: 'Engaged', 3: 'Highly Engaged', 4: 'SNP'}
 # ---------------------------------------------------------
 
-# --- Model Loading ---
-MODEL_WEIGHTS_PATH = "./logic/Models/v1.pth"
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# --- ONNX Model Loading ---
+ONNX_MODEL_PATH = "./logic/Models/v1.onnx" # Path to the ONNX model file
+# ONNX Runtime will automatically use available providers.
+# You can specify providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
+# if you want to prioritize GPU (requires onnxruntime-gpu).
+# Default is usually CPU.
 # --------------------
 
-print(f"--- Model Test Configuration ---")
-print(f"Device: {DEVICE}")
+print(f"--- ONNX Model Inference Configuration ---")
 print(f"Expected Sequence Length: {SEQ_LEN}")
-print(f"Model Path: {MODEL_WEIGHTS_PATH}")
+print(f"ONNX Model Path: {ONNX_MODEL_PATH}")
 print(f"-----------------------------")
 
-# ================================================
-# === Model Definition ===
-# ================================================
-class EngagementRegressionModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim=1, num_layers=2, dropout=0.5, bidirectional=True):
-        super().__init__()
-        self.input_dim = input_dim; self.hidden_dim = hidden_dim; self.num_layers = num_layers
-        self.bidirectional = bidirectional; self.num_classes = output_dim
-        self.frame_norm = nn.LayerNorm(input_dim); gru_input_dim = input_dim
-        self.gru = nn.GRU(gru_input_dim, hidden_dim, num_layers=num_layers, batch_first=True,
-                          dropout=dropout if num_layers > 1 else 0, bidirectional=bidirectional)
-        gru_output_dim = hidden_dim * 2 if bidirectional else hidden_dim
-        self.dropout = nn.Dropout(dropout); self.fc1 = nn.Linear(gru_output_dim, hidden_dim // 2)
-        self.relu = nn.ReLU(); self.fc2 = nn.Linear(hidden_dim // 2, output_dim)
-        self.output_activation = nn.Sigmoid() # Assuming [0,1] output model
 
-    def forward(self, x):
-        # Input expected as [batch, seq, features = num_landmarks * num_coords]
-        if x.shape[2] != self.input_dim: raise ValueError(f"Input dim mismatch")
-        x = self.frame_norm(x); gru_out, hn = self.gru(x)
-        if self.bidirectional: last_hidden = torch.cat((hn[-2,:,:], hn[-1,:,:]), dim=1)
-        else: last_hidden = hn[-1,:,:]
-        out = self.dropout(last_hidden); out = self.fc1(out); out = self.relu(out); out = self.fc2(out)
-        out = self.output_activation(out); return out
-# ================================================
+def map_score_to_class_details(score: Optional[float]) -> Dict[str, Any]:
+    """
+    Maps a continuous regression score [0, 1] to a discrete class index and name.
+
+    Args:
+        score (Optional[float]): The predicted regression score.
+
+    Returns:
+        Dict[str, Any]: A dictionary containing 'index' (int) and 'name' (str).
+                        Returns index -1 and appropriate name for invalid/None scores.
+    """
+    if score is None:
+        return {"index": -1, "name": "Prediction Failed"}
+    if not (0.0 <= score <= 1.0):
+         return {"index": -1, "name": "Invalid Score Range"}
+
+    # Thresholds centered between target scores (0.0, 0.25, 0.5, 0.75, 1.0)
+    if 0.0 <= score < 0.125: class_index = 4 # SNP
+    elif 0.125 <= score < 0.375: class_index = 0 # Not Engaged
+    elif 0.375 <= score < 0.625: class_index = 1 # Barely Engaged
+    elif 0.625 <= score < 0.875: class_index = 2 # Engaged
+    elif 0.875 <= score <= 1.0: class_index = 3 # Highly Engaged
+    else: class_index = -1 # Fallback, should be caught by initial check
+
+    class_name = IDX_TO_NAME_MAP.get(class_index, "Unknown Index")
+    return {"index": class_index, "name": class_name}
+
 
 # ================================================
-# === Model Loading ===
+# === ONNX Model Loading ===
 # ================================================
-def load_engagement_model(weights_path: str, device: torch.device) -> Optional[EngagementRegressionModel]:
-    """ Loads the pre-trained EngagementRegressionModel. """
-    model = None
-    print(f"\nLoading model weights from: {weights_path}")
-    if not os.path.exists(weights_path):
-        print(f"Error: Model weights file not found at {weights_path}")
+def load_onnx_session(onnx_model_path: str) -> Optional[onnxruntime.InferenceSession]:
+    """ Loads the ONNX model into an InferenceSession. """
+    session = None
+    print(f"\nLoading ONNX model from: {onnx_model_path}")
+    if not os.path.exists(onnx_model_path):
+        print(f"Error: ONNX model file not found at {onnx_model_path}")
     else:
         try:
-            model_instance = EngagementRegressionModel(
-                input_dim=INPUT_DIM, hidden_dim=HIDDEN_DIM, output_dim=OUTPUT_DIM,
-                num_layers=NUM_GRU_LAYERS, dropout=DROPOUT_RATE, bidirectional=BIDIRECTIONAL_GRU
-            )
-            model_instance.load_state_dict(torch.load(weights_path, map_location=device))
-            model_instance.to(device)
-            model_instance.eval()
-            print("Model loaded successfully and set to evaluation mode.")
-            model = model_instance
+            # Create an inference session for the ONNX model
+            # Providers can be specified, e.g., ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            # If not specified, ONNX Runtime uses available providers (usually CPU first).
+            session = onnxruntime.InferenceSession(onnx_model_path, providers=['CPUExecutionProvider']) # Explicitly use CPU for broader compatibility
+            print(f"ONNX model loaded successfully. Input Names: {[inp.name for inp in session.get_inputs()]}, Output Names: {[out.name for out in session.get_outputs()]}")
         except Exception as e:
-            print(f"Error loading model state_dict: {e}")
-    return model
+            print(f"Error loading ONNX model: {e}")
+            print("Ensure onnxruntime is installed (`pip install onnxruntime`) and the model file is valid.")
+    return session
 
-loaded_model = load_engagement_model(MODEL_WEIGHTS_PATH, DEVICE)
+
+# Load the ONNX session globally or pass it to the prediction function
+onnx_session = load_onnx_session(ONNX_MODEL_PATH)
 # ================================================
 
 
@@ -103,9 +106,9 @@ def preprocess_landmarks_pipeline_style(
     target_frames: int = SEQ_LEN,
     num_landmarks: int = NUM_LANDMARKS,
     dims: int = NUM_COORDS
-    ) -> Optional[torch.Tensor]:
+    ) -> Optional[np.ndarray]: # Return NumPy array for ONNX
     """
-    Preprocesses raw landmark sequence into a tensor stack, mirroring pipeline logic.
+    Preprocesses raw landmark sequence into a NumPy array stack.
     Handles missing frames/landmarks, padding/truncation with -1.0.
     Output shape: (target_frames, num_landmarks, dims)
     """
@@ -115,21 +118,26 @@ def preprocess_landmarks_pipeline_style(
 
     processed_frames = []
     # Frame-by-Frame Processing
-    landmarks = landmarks_sequence[0]
-    for frame_data in landmarks:
+    # Ensure we handle the nested list structure correctly if landmarks_sequence = [[frame1_data, frame2_data,...]]
+    actual_frames_data = landmarks_sequence
+    if len(landmarks_sequence) == 1 and isinstance(landmarks_sequence[0], list):
+         actual_frames_data = landmarks_sequence[0] # Handle potential extra nesting
+
+    for frame_data in actual_frames_data:
         # Check for missing frame indicator (None or -1)
         if frame_data is None or frame_data == -1:
-            frame_tensor = torch.full((num_landmarks, dims), -1.0, dtype=torch.float32)
+            # Use NumPy array for consistency
+            frame_array = np.full((num_landmarks, dims), -1.0, dtype=np.float32)
         elif isinstance(frame_data, list):
             coords = []
             try:
                 for landmark in frame_data:
                     if isinstance(landmark, dict) and 'x' in landmark and 'y' in landmark and 'z' in landmark:
                         coords.append([landmark['x'], landmark['y'], landmark['z']])
-                    # else: Skip malformed landmark data silently for brevity
+                    # else: Skip malformed landmark data silently
 
                 if not coords: # Treat frame with no valid landmarks as missing
-                    frame_tensor = torch.full((num_landmarks, dims), -1.0, dtype=torch.float32)
+                    frame_array = np.full((num_landmarks, dims), -1.0, dtype=np.float32)
                 else:
                     coords_np = np.array(coords, dtype=np.float32)
                     current_num_landmarks = coords_np.shape[0]
@@ -142,26 +150,26 @@ def preprocess_landmarks_pipeline_style(
                     elif current_num_landmarks > num_landmarks:
                         coords_np = coords_np[:num_landmarks, :]
 
-                    frame_tensor = torch.tensor(coords_np, dtype=torch.float32)
+                    frame_array = coords_np # Already a NumPy array
 
             except Exception as e: # Error during coord extraction
                  print(f"Error processing landmarks in a frame: {e}. Treating as missing.")
-                 frame_tensor = torch.full((num_landmarks, dims), -1.0, dtype=torch.float32)
+                 frame_array = np.full((num_landmarks, dims), -1.0, dtype=np.float32)
         else: # Handle unexpected data type for a frame
             print(f"Warning: Unexpected data type in landmarks_sequence: {type(frame_data)}. Treating as missing frame.")
-            frame_tensor = torch.full((num_landmarks, dims), -1.0, dtype=torch.float32)
+            frame_array = np.full((num_landmarks, dims), -1.0, dtype=np.float32)
 
-        processed_frames.append(frame_tensor)
+        processed_frames.append(frame_array)
 
     # Sequence Padding/Truncation
     original_frames = len(processed_frames)
-    final_processed_frames = [] # Use a new list for clarity with single return
+    final_processed_frames = []
 
     if original_frames == 0:
         print("Warning: No frames processed. Returning None.")
         return None # Return None for empty/invalid sequences
     elif original_frames < target_frames:
-        pad_frame = torch.full((num_landmarks, dims), -1.0, dtype=torch.float32)
+        pad_frame = np.full((num_landmarks, dims), -1.0, dtype=np.float32)
         num_padding_frames = target_frames - original_frames
         final_processed_frames = processed_frames + [pad_frame] * num_padding_frames
     elif original_frames > target_frames:
@@ -169,91 +177,106 @@ def preprocess_landmarks_pipeline_style(
     else:
         final_processed_frames = processed_frames # No padding/truncation needed
 
-    # Final Tensor Stacking
-    tensor_stack = None
+    # Final Array Stacking
+    array_stack = None
     try:
-        tensor_stack = torch.stack(final_processed_frames)
+        # Stack the list of NumPy arrays into a single NumPy array
+        array_stack = np.stack(final_processed_frames)
     except Exception as e:
-        print(f"Error during final tensor stacking: {e}")
-        # tensor_stack remains None
+        print(f"Error during final array stacking: {e}")
+        # array_stack remains None
 
-    return tensor_stack # Shape: (target_frames, num_landmarks, dims) or None
+    return array_stack # Shape: (target_frames, num_landmarks, dims) or None
 # ================================================
 
 
 # ================================================
-# === Prediction Function ===
+# === Prediction Function (ONNX Version) ===
 # ================================================
-def predict_engagement_dnn(
+def predict_engagement_onnx(
     extraction_payload: Dict[str, Any],
-    model: nn.Module,
-    device: torch.device,
+    session: onnxruntime.InferenceSession,
     log_data_id: int,
-    ) -> Optional[float]:
+    ) -> Optional[Dict[str, Any]]: # Return dict with score, index, name
     """
-    Runs inference using the loaded DNN model on data from extraction_payload.
-    Uses pipeline-style preprocessing.
+    Runs inference using the loaded ONNX model and returns score and classification details.
     """
-    predicted_score = None # Initialize return variable
+    predicted_score = None
+    prediction_details = None
 
-    if model is None:
-        print("Error: Model is not loaded.")
-        return predicted_score # Early return on critical error
+    # --- Input Validation ---
+    if session is None:
+        print("Error: ONNX session is not loaded.")
+        store_model_result(log_data_id, "v1_onnx", 0.0)
+        return None
     if not isinstance(extraction_payload, dict):
          print("Error: extraction_payload is not a dictionary.")
-         return predicted_score # Early return on critical error
-
+         store_model_result(log_data_id, "v1_onnx", 0.0)
+         return None
     landmarks_raw = extraction_payload.get("landmarks")
     if landmarks_raw is None or not isinstance(landmarks_raw, list):
         print("Error: 'landmarks' key missing or data is not a list in payload.")
-        return predicted_score # Early return on critical error
+        store_model_result(log_data_id, "v1_onnx", 0.0)
+        return None
 
-    # 1. Preprocess using the pipeline-style function
-    # Output shape: (SEQ_LEN, NUM_LANDMARKS, NUM_COORDS)
-    sequence_tensor_unbatched = preprocess_landmarks_pipeline_style(
-        landmarks_raw,
-        target_frames=SEQ_LEN,
-        num_landmarks=NUM_LANDMARKS,
-        dims=NUM_COORDS
+    # 1. Preprocess landmarks
+    # Expected output shape: (SEQ_LEN, NUM_LANDMARKS, NUM_COORDS) -> Rank 3
+    sequence_array_unbatched = preprocess_landmarks_pipeline_style(
+        landmarks_raw, target_frames=SEQ_LEN, num_landmarks=NUM_LANDMARKS, dims=NUM_COORDS
     )
 
-    if sequence_tensor_unbatched is None:
-        print("Error: Failed to preprocess landmarks into tensor.")
-        # store_model_result(log_data_id, "v1", predicted_score) # Store None if preprocessing fails
-        return predicted_score # Return None
+    if sequence_array_unbatched is None:
+        print("Error: Failed to preprocess landmarks into array.")
+        store_model_result(log_data_id, "v1_onnx", 0.0)
+        return None
 
-    # 2. Reshape, Add Batch Dimension, and Move to Device for Model Input
-    # Expected input shape: (1, SEQ_LEN, NUM_LANDMARKS * NUM_COORDS)
-    input_tensor = None
+    # 2. Prepare Input for ONNX Model (Add Batch Dimension)
+    # The ONNX model expects a 4D input: (batch_size, seq_len, num_landmarks, num_coords)
+    input_array = None
     try:
-        # Reshape: (SEQ_LEN, NUM_LANDMARKS, NUM_COORDS) -> (SEQ_LEN, NUM_LANDMARKS * NUM_COORDS)
-        sequence_tensor_flat = sequence_tensor_unbatched.reshape(SEQ_LEN, -1) # -1 infers INPUT_DIM
+        # Add batch dimension to the front -> Shape: (1, SEQ_LEN, NUM_LANDMARKS, NUM_COORDS) -> Rank 4
+        input_array = np.expand_dims(sequence_array_unbatched, axis=0).astype(np.float32)
 
-        if sequence_tensor_flat.shape[1] != INPUT_DIM:
-             print(f"Error: Unexpected feature dimension after reshape: {sequence_tensor_flat.shape[1]}, expected {INPUT_DIM}")
-             # predicted_score remains None
-        else:
-            # Add batch dim: (SEQ_LEN, INPUT_DIM) -> (1, SEQ_LEN, INPUT_DIM)
-            input_tensor = sequence_tensor_flat.unsqueeze(0).to(device)
+        # --- Shape Validation (Crucial Debug Step) ---
+        expected_shape = (1, SEQ_LEN, NUM_LANDMARKS, NUM_COORDS)
+        if input_array.shape != expected_shape:
+            print(f"Error: Input array shape mismatch! Got {input_array.shape}, Expected {expected_shape}")
+            store_model_result(log_data_id, "v1_onnx", 0.0)
+            return None # Stop before inference if shape is wrong
 
     except Exception as e:
-        print(f"Error during tensor reshape/batching: {e}")
-        # predicted_score remains None
+        print(f"Error during input array preparation (batching/typing): {e}")
+        store_model_result(log_data_id, "v1_onnx", 0.0)
+        return None
 
-    # 3. Run Inference (only if input_tensor was created successfully)
-    if input_tensor is not None:
-        try:
-            with torch.no_grad():
-                output_score_tensor = model(input_tensor) # Model output is [1, 1]
+    # 3. Run Inference
+    try:
+        input_name = session.get_inputs()[0].name
+        output_name = session.get_outputs()[0].name
+        ort_inputs = {input_name: input_array} # Use the 4D input_array
 
-            predicted_score = output_score_tensor.item()
-            predicted_score = max(0.0, min(1.0, predicted_score)) # Clamp [0, 1]
+        # Run inference
+        ort_outs = session.run([output_name], ort_inputs)
 
-        except Exception as e:
-            print(f"Error during model inference: {e}")
-            predicted_score = None # Reset score to None on inference error
+        # Extract the score - ort_outs is a list containing the output array(s)
+        # Assuming the model output shape is (batch_size, 1) -> (1, 1)
+        predicted_score = float(ort_outs[0][0][0]) # Extract scalar float value
 
-    store_model_result(log_data_id, "v1", predicted_score) # Store the result (could be None)
+        # Clamp score to expected [0, 1] range AFTER inference
+        predicted_score = max(0.0, min(1.0, predicted_score))
 
-    return predicted_score
+    except Exception as e:
+        print(f"Error during ONNX inference: {e}")
+        # predicted_score remains None if inference fails
+
+    # 4. Map score to class details (handles None score internally)
+    prediction_details = map_score_to_class_details(predicted_score)
+    prediction_details["score"] = predicted_score # Add the score (potentially None)
+
+    # Store the raw score (could be None)
+    store_model_result(log_data_id, "v1_onnx", predicted_score)
+
+    # Return the dictionary containing score, index, and name
+    return prediction_details
+# ================================================
 # ================================================

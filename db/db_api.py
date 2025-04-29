@@ -493,3 +493,33 @@ def process_mediapipe_data(watch_item_id, current_time, extraction_payload):
               }, 200
     """
     return watch_management.process_mediapipe_data(watch_item_id, current_time, extraction_payload)
+
+def get_model_results_by_video(youtube_id: str):
+    """
+    Retrieves all model results for a specific YouTube video, grouped by user.
+
+    Args:
+        youtube_id (str): The ID of the YouTube video.
+
+    Returns:
+        tuple: (response_dict, status_code)
+            Example success:
+              {
+                "status": "success",
+                "youtube_id": "some_video_id",
+                "results_by_user": {
+                  <user_id_1>: [
+                    {"model_result_id": 1, "log_data_id": 10, "model": "v1_onnx", "result": 0.75, "timestamp": ...},
+                    {"model_result_id": 5, "log_data_id": 15, "model": "basic", "result": 0.80, "timestamp": ...}
+                  ],
+                  <user_id_2>: [
+                    {"model_result_id": 8, "log_data_id": 22, "model": "v1_onnx", "result": 0.60, "timestamp": ...}
+                  ]
+                }
+              }, 200
+            Example not found:
+              {"status": "success", "youtube_id": "some_video_id", "results_by_user": {}}, 200
+            Example error:
+              {"status": "failed", "reason": "Error retrieving model results"}, 500
+    """
+    return watch_management.get_model_results_by_video(youtube_id)
