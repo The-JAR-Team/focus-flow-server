@@ -155,16 +155,14 @@ def watch_log_watch():
     return jsonify(message), status
 
 
-@watch_items_bp.route('/watch/get_results', methods=['GET'])
+@watch_items_bp.route('/watch/get_results', methods=['GET']) # Changed method to GET
 def watch_get_results():
     """
-    Retrieves model results for a specific YouTube video. Ensures a single return point.
+    Retrieves model results for a specific YouTube video via GET request.
 
-    Expected JSON payload:
-    {
-        "youtube_id": <string>,      # Required
-        "option": <string>           # Optional: "all" or "alone" (default: "alone")
-    }
+    Query Parameters:
+        youtube_id (str): Required. The ID of the YouTube video.
+        option (str): Optional. "all" or "alone" (default: "alone").
 
     Returns:
         JSON response containing model results, filtered based on the 'option'.
@@ -178,53 +176,49 @@ def watch_get_results():
         response_payload = auth_resp
         status_code = auth_status
     else: # User is authenticated, proceed
-        # --- Get and Validate Payload ---
-        data = request.get_json()
-        if not data:
-            response_payload = {"status": "failed", "message": "Invalid JSON payload."}
-            status_code = 400
+        # --- Get and Validate Query Parameters ---
+        # Use request.args for GET parameters
+        youtube_id = request.args.get("youtube_id")
+        option = request.args.get("option", "alone").lower() # Default to 'alone'
+
+        # --- Validate Input Fields ---
+        if not youtube_id:
+             response_payload = {"status": "failed", "message": "Missing 'youtube_id' query parameter."}
+             status_code = 400
+        elif option not in ["all", "alone"]:
+             response_payload = {"status": "failed", "message": "Invalid 'option' query parameter. Must be 'all' or 'alone'."}
+             status_code = 400
         else:
-            youtube_id = data.get("youtube_id")
-            option = data.get("option", "alone").lower() # Default to 'alone'
+            # --- Check Video Access ---
+            vid_message, vid_status = check_authenticated_video(youtube_id, user_id)
+            if vid_status != 200:
+                response_payload = vid_message
+                status_code = vid_status
+            else: # User has access, proceed to fetch results
+                # --- Fetch Results from DB ---
+                results_data, results_status = get_model_results_by_video(youtube_id)
 
-            # --- Validate Input Fields ---
-            if not youtube_id:
-                 response_payload = {"status": "failed", "message": "Missing 'youtube_id' in request."}
-                 status_code = 400
-            elif option not in ["all", "alone"]:
-                 response_payload = {"status": "failed", "message": "Invalid 'option'. Must be 'all' or 'alone'."}
-                 status_code = 400
-            else:
-                # --- Check Video Access ---
-                vid_message, vid_status = check_authenticated_video(youtube_id, user_id)
-                if vid_status != 200:
-                    response_payload = vid_message
-                    status_code = vid_status
-                else: # User has access, proceed to fetch results
-                    # --- Fetch Results from DB ---
-                    results_data, results_status = get_model_results_by_video(youtube_id)
+                if results_status != 200:
+                    response_payload = results_data # Use error response from DB function
+                    status_code = results_status
+                else: # Results fetched successfully (might be empty)
+                    # --- Filter Results ---
+                    final_results = {}
+                    all_results = results_data.get("results_by_user", {})
 
-                    if results_status != 200:
-                        response_payload = results_data # Use error response from DB function
-                        status_code = results_status
-                    else: # Results fetched successfully (might be empty)
-                        # --- Filter Results ---
-                        final_results = {}
-                        all_results = results_data.get("results_by_user", {})
+                    if option == "all":
+                        final_results = all_results
+                    elif option == "alone":
+                        final_results = {user_id: all_results[user_id]} if user_id in all_results else {}
 
-                        if option == "all":
-                            final_results = all_results
-                        elif option == "alone":
-                            final_results = {user_id: all_results[user_id]} if user_id in all_results else {}
-
-                        # --- Construct Success Response ---
-                        response_payload = {
-                            "status": "success",
-                            "youtube_id": youtube_id,
-                            "option": option,
-                            "results_by_user": final_results
-                        }
-                        status_code = 200
+                    # --- Construct Success Response ---
+                    response_payload = {
+                        "status": "success",
+                        "youtube_id": youtube_id,
+                        "option": option,
+                        "results_by_user": final_results
+                    }
+                    status_code = 200
 
     # --- Single Return Point ---
     return jsonify(response_payload), status_code
