@@ -3,12 +3,28 @@ import math
 import os
 import threading
 import time
+import traceback
 
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.proxies import GenericProxyConfig
 from db.db_api import store_questions_in_db, questions_ready
 from logic.gemini_api import generate
+
+# Lock mechanism to prevent duplicate generations
+generation_locks = {}  # key: "{youtube_id}_{lang}" -> Lock
+
+# Track request patterns to identify duplicates
+request_tracking = {}
+
+def sanitize_text(text: str) -> str:
+    """Clean transcript text to avoid JSON parsing issues"""
+    # Replace problematic characters that can break JSON
+    return (text.replace('\r', ' ')
+                .replace('\n', ' ')
+                .replace('"', '\\"')
+                .replace('\t', ' ')
+                .replace('\\', '\\\\'))
 
 
 def seconds_to_hhmmss(seconds):
@@ -140,24 +156,43 @@ def generate_questions_from_transcript(youtube_id: str, lang="Hebrew", chunk_dur
         "error": <error message if any, otherwise omitted>
       }
     """
+    # Track caller to identify source of duplicate requests
+    stack = traceback.extract_stack()
+    caller_info = f"{stack[-2].name}:{stack[-2].lineno}" if len(stack) > 1 else "unknown"
+    
+    # Log request info
+    request_key = f"{youtube_id}_{lang}"
+    request_count = request_tracking.get(request_key, 0) + 1
+    request_tracking[request_key] = request_count
+    print(f"[DEBUG] Request #{request_count} for {request_key} from caller {caller_info}")
+    
     try:
-        print(f"Generating {lang} questions for {youtube_id} with chunk size {chunk_duration} seconds...")
         transcript_text = fetch_transcript_as_string(youtube_id)
         chunks = split_transcript(transcript_text, chunk_duration)
 
         results = [None] * len(chunks)
 
         def worker(i, chunk_text):
+            result_str = ""  # ensure defined for error logging
             try:
-                # Call the generative API for this chunk.
-                result_str = generate(text_file=chunk_text, lang=lang)
+                # Sanitize text before sending to the model
+                clean_chunk = sanitize_text(chunk_text)
+                result_str = generate(text_file=clean_chunk, lang=lang)
                 result_dict = json.loads(result_str)
                 questions = result_dict.get("questions", [])
             except json.JSONDecodeError as e:
-                print(f"Error parsing JSON for chunk {i+1}: {e}")
-                questions = []
+                # one retry
+                try:
+                    time.sleep(0.5)  # Increased delay on retry
+                    clean_chunk = sanitize_text(chunk_text)
+                    result_str = generate(text_file=clean_chunk, lang=lang)
+                    result_dict = json.loads(result_str)
+                    questions = result_dict.get("questions", [])
+                except Exception as ex2:
+                    print(f"Retry failed for chunk {i+1}: {ex2}")
+                    questions = []
             except Exception as ex:
-                print(f"Error in worker for chunk {i+1}: {ex}")
+                print(f"Worker#{i} fatal error: {ex}")
                 questions = []
             results[i] = questions
 
@@ -181,16 +216,54 @@ def generate_questions_from_transcript(youtube_id: str, lang="Hebrew", chunk_dur
         # Store the questions in the database.
         store_questions_in_db(youtube_id, lang, all_questions)
 
+        # If we got nothing back, let the caller know.
+        if not all_questions:
+            return {"questions": [], "error": "No questions generated. See server logs for details."}
+
         print(f"Finished generation for {lang}. Found {len(all_questions)} questions total.")
         return {"questions": all_questions}
     except Exception as e:
-        print(f"Error in generate_questions_from_transcript: {e}")
-        # Instead of raising an error, return an error message with an empty list.
+        print(f"Error in generate_questions_from_transcript for {youtube_id} ({lang}): {e}")
         return {"questions": [], "error": str(e)}
 
 
 def gen_if_empty(youtube_id: str, lang="Hebrew"):
-    # Suppose questions_ready() returns how many questions exist for that video & language
-    if questions_ready(youtube_id, lang) == 0:
-        return generate_questions_from_transcript(youtube_id, lang)
+    """
+    Generate questions if none exist, using locks to prevent duplicate requests.
+    """
+    # Get a lock for this specific youtube_id and language combination
+    key = f"{youtube_id}_{lang}"
+    
+    # Create a new lock if this is the first time we're seeing this combination
+    if key not in generation_locks:
+        generation_locks[key] = threading.Lock()
+    
+    lock = generation_locks[key]
+
+    # Check if questions already exist - quick check before acquiring lock
+    question_count = questions_ready(youtube_id, lang)
+    if question_count > 0:
+        return None
+        
+    if not lock.acquire(blocking=False):
+        return {"questions": [], "error": "Generation already in progress"}
+        
+    try:
+        # Double-check if questions exist now that we have the lock
+        question_count_in_lock = questions_ready(youtube_id, lang)
+        if question_count_in_lock == 0:
+            generation_result = generate_questions_from_transcript(youtube_id, lang)
+            if generation_result and "error" in generation_result and generation_result["error"]:
+                return generation_result
+            elif generation_result:
+                return generation_result
+            else:
+                return {"questions": [], "error": "Internal generation error"}
+        else:
+            return None
+    except Exception as e:
+        print(f"Exception occurred during locked generation for {key}: {e}")
+        return {"questions": [], "error": f"Generation failed: {e}"}
+    finally:
+        lock.release()
 
