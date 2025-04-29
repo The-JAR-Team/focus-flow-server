@@ -23,7 +23,7 @@ def generate(text_file: str, lang: str = "Hebrew") -> str:
     """
     load_dotenv()
     client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-    model = "gemini-2.0-flash"
+    model = "gemini-2.5-flash-preview-04-17"
 
     # Prepare the user content (the transcript / text input)
     contents = [
