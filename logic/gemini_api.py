@@ -79,7 +79,7 @@ def generate(text_file: str, lang: str = "Hebrew") -> str:
     ]
 
     system_instruction_text = (
-        "Ensure the output is valid JSON: escape all double‑quotes inside strings and do not truncate the JSON structure.\n"
+        f"Ensure the output is valid JSON: escape all double‑quotes inside strings and do not truncate the JSON structure.\n"
         + """You are a question-generation assistant creating a large pool of questions from a transcript, covering various difficulty levels for later filtering and use. Maximize the number of relevant questions generated according to the guidelines, with a special emphasis on frequent, simple recall questions. Follow these steps carefully:
 
 1.  **Task**: Create multiple-choice questions in **{lang}** from the provided text transcript.
