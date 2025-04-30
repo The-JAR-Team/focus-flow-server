@@ -299,10 +299,7 @@ def get_or_generate_questions(youtube_id: str, lang: str = "Hebrew") -> Dict[str
         response_payload["reason"] = f"An unexpected error occurred: {str(e)}"
     finally:
         if lock_acquired:
-            print(f"Releasing lock for {lock_key}...")
             if not release_lock(lock_key):
                 print(f"Warning: Failed to release lock for {lock_key}.")
-            else:
-                print(f"Lock released for {lock_key}.")
 
     return response_payload

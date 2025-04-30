@@ -1,5 +1,5 @@
-import psycopg2.errors # To specifically catch unique constraint errors
-from db.DB import DB # Assuming DB class handles connection/cursor
+import psycopg2.errors  # To specifically catch unique constraint errors
+from db.DB import DB  # Assuming DB class handles connection/cursor
 
 # Define the specific error code for unique violation in PostgreSQL
 UNIQUE_VIOLATION_CODE = '23505'
@@ -17,7 +17,7 @@ def acquire_lock(lock_key: str) -> bool:
     """
     acquired = False
     try:
-        with DB.get_cursor() as cur: # Ensure commit happens if insert succeeds
+        with DB.get_cursor() as cur:  # Ensure commit happens if insert succeeds
             # Attempt to insert the lock key.
             # The primary key constraint on lock_key handles uniqueness.
             # created_at defaults to NOW().
@@ -53,7 +53,7 @@ def release_lock(lock_key: str) -> bool:
     """
     released = False
     try:
-        with DB.get_cursor() as cur: # Ensure commit happens after delete
+        with DB.get_cursor() as cur:  # Ensure commit happens after delete
             # Delete the lock row. It's okay if the row doesn't exist (idempotent).
             cur.execute(
                 '''DELETE FROM "Generation_Locks"
@@ -63,7 +63,7 @@ def release_lock(lock_key: str) -> bool:
             # Check if any row was actually deleted (optional, indicates if lock existed)
             # rowcount = cur.rowcount
             # print(f"Lock released for: {lock_key}. Rows affected: {rowcount}")
-            released = True # Consider success if no error occurs
+            released = True  # Consider success if no error occurs
 
     except Exception as e:
         # Handle potential database errors during delete
