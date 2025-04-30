@@ -1,5 +1,5 @@
 import json
-
+from collections import defaultdict
 from db.DB import DB
 from datetime import datetime
 
@@ -142,7 +142,6 @@ def process_mediapipe_data(watch_item_id, current_time, extraction_payload):
             {
                 "fps": int,                # Frames per second
                 "interval": int,           # Time interval in seconds
-                "number_of_landmarks": int,  # Number of landmarks per frame
                 "landmarks": array         # Array of landmark data
             }
     Returns:
@@ -160,11 +159,8 @@ def process_mediapipe_data(watch_item_id, current_time, extraction_payload):
             # Extract data from payload
             fps = extraction_payload.get("fps")
             interval = extraction_payload.get("interval")
-            number_of_landmarks = extraction_payload.get("number_of_landmarks")
-            landmarks = extraction_payload.get("landmarks")
-            landmarks = []
 
-            if not all([fps, interval, number_of_landmarks, landmarks]):
+            if not all([fps, interval]):
                 return {
                     "status": "failed",
                     "message": "Missing required fields in extraction payload"
@@ -181,15 +177,15 @@ def process_mediapipe_data(watch_item_id, current_time, extraction_payload):
             watch_data_id = cur.fetchone()[0]
 
             # Next, create a Log_Data entry with landmarks stored as JSONB
-            extraction_type = f"mediapipe:{number_of_landmarks}"
+            extraction_type = f"mediapipe"
 
             # Using JSONB for storing landmarks
             cur.execute(
                 '''INSERT INTO "Log_Data"
-                   (watch_data_id, fps_num, extraction_type, fps_log)
-                   VALUES (%s, %s, %s, %s)
+                   (watch_data_id, fps_num, extraction_type)
+                   VALUES (%s, %s, %s)
                    RETURNING log_data_id''',
-                (watch_data_id, fps, extraction_type, json.dumps(landmarks))
+                (watch_data_id, fps, extraction_type)
             )
             log_data_id = cur.fetchone()[0]
 
@@ -252,3 +248,76 @@ def get_log_data(log_data_id):
     except Exception as e:
         print(f"Error retrieving log data: {e}")
         return None
+
+
+def get_model_results_by_video(youtube_id: str):
+    """
+    Retrieves all model results for a specific YouTube video, grouped by user.
+
+    Args:
+        youtube_id (str): The ID of the YouTube video.
+
+    Returns:
+        tuple: (response_dict, status_code)
+            Example success:
+              {
+                "status": "success",
+                "youtube_id": "some_video_id",
+                "results_by_user": {
+                  <user_id_1>: [
+                    {"model_result_id": 1, "log_data_id": 10, "model": "v1_onnx", "result": 0.75, "timestamp": "...", "video_time": 123.45},
+                    # ... more results for user 1
+                  ],
+                  <user_id_2>: [
+                    # ... results for user 2
+                  ]
+                }
+              }, 200
+            Example not found:
+              {"status": "success", "youtube_id": "some_video_id", "results_by_user": {}}, 200
+            Example error:
+              {"status": "failed", "reason": "Error retrieving model results"}, 500
+    """
+    # Use defaultdict(list) for automatic list creation per user
+    results_by_user = defaultdict(list)
+    try:
+        with DB.get_cursor() as cur:
+            cur.execute(
+                '''SELECT
+                       wi.user_id,
+                       mr.model_result_id,
+                       mr.log_data_id,
+                       mr.model,
+                       mr.result,
+                       wd.log_date AS timestamp, -- Use log_date from Watch_Data as timestamp
+                       wd.vid_watch_time -- Get the video time associated with the log
+                   FROM "Model_Result" mr
+                   JOIN "Log_Data" ld ON mr.log_data_id = ld.log_data_id
+                   JOIN "Watch_Data" wd ON ld.watch_data_id = wd.watch_data_id
+                   JOIN "Watch_Item" wi ON wd.watch_item_id = wi.watch_item_id
+                   WHERE wi.youtube_id = %s
+                   ORDER BY wi.user_id, wd.log_date''', # Order for potential chronological listing per user
+                (youtube_id,)
+            )
+            rows = cur.fetchall()
+
+            for row in rows:
+                user_id, model_result_id, log_data_id, model_name, result, timestamp, video_time = row
+                results_by_user[user_id].append({
+                    "model_result_id": model_result_id,
+                    "log_data_id": log_data_id,
+                    "model": model_name,
+                    "result": result,
+                    "timestamp": timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp),
+                    "video_time": video_time # Include the video time
+                })
+
+            return {
+                "status": "success",
+                "youtube_id": youtube_id,
+                "results_by_user": dict(results_by_user)
+            }, 200
+
+    except Exception as e:
+        print(f"Error in get_model_results_by_video for youtube_id {youtube_id}: {e}")
+        return {"status": "failed", "reason": "Error retrieving model results"}, 500

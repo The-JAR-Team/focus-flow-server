@@ -2,3 +2,15 @@
 __pycache__
 *.pyc
 .git
+# .dockerignore
+.gitignore
+.dockerignore
+__pycache__/
+.venv/
+venv/
+*.env
+.env.*
+*.pth # Don't copy model weights directly if loaded from elsewhere
+*.pt # Don't copy cached tensors
+*.log
+tests/

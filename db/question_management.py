@@ -185,7 +185,7 @@ def get_questions_for_video(youtube_id, language):
             )
             row = cur.fetchone()
             if row is None:
-                print(f"Info: No question group found for youtube_id={youtube_id}, language={language}")
+                #print(f"Info: No question group found for youtube_id={youtube_id}, language={language}")
                 return empty_result  # No questions found
 
             question_group_id = row[0]

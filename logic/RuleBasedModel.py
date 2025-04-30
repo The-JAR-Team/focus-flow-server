@@ -1,4 +1,5 @@
 from db.DB import DB
+import math
 
 
 def flatten_landmarks(landmarks, expected_frames=None):
@@ -66,7 +67,7 @@ def RuleBasedModel(extraction_payload, log_data_id):
         attention_score = calculate_attention_score(landmarks, fps, interval)
 
         # Uncomment to store the result to DB:
-        # store_model_result(log_data_id, "RuleBasedModel", attention_score)
+        store_model_result(log_data_id, "RuleBasedModel", attention_score)
 
         return attention_score
 
@@ -77,80 +78,157 @@ def RuleBasedModel(extraction_payload, log_data_id):
 
 def calculate_attention_score(landmarks, fps, interval):
     """
-    Calculate attention score using a point-based system.
+    Calculate attention score using a point-based system with weighted frames.
+    Frames in the last 2 seconds of the intended 10s interval have higher weight.
 
     Starting at 1.0, points are deducted for:
-      - Missing face detection (0.3 of frame score)
-      - Not looking at screen (full frame score)
-      - Excessive movement (0.5 of frame score)
-
-    The deduction per frame is weighted by a factor (point_value).
+      - Missing face detection (0.3 of frame score weight)
+      - Not looking at screen (1.0 of frame score weight)
+      - Excessive movement (0.5 of frame score weight)
 
     Args:
         landmarks (list): List of frames (each frame a list of landmarks)
-        fps (int): Frames per second
-        interval (int): Time interval (in seconds)
+        fps (int): Frames per second (can be variable, used for context)
+        interval (int): Intended time interval (in seconds, expected to be 10)
 
     Returns:
         float: Final attention score between 0.0 and 1.0.
     """
-    if not landmarks or fps == 0 or interval == 0:
-        return 0.5  # Cannot compute properly
+    num_landmarks = len(landmarks)
+    if not landmarks or num_landmarks == 0:
+        print("No landmarks received, returning default score.")
+        return 0.5 # Cannot compute properly
 
-    total_frames = fps * interval
-    # Default point value per frame
-    point_value = 1.0 / total_frames if total_frames > 0 else 0.1
+    # --- Weighting Calculation ---
+    intended_interval = 10.0  # We assume the target is always 10 seconds
+    late_period_duration = 2.0  # The last 2 seconds are more important
+    early_period_duration = intended_interval - late_period_duration # First 8 seconds
 
-    # If you have very few frames, adjust the weighting so deductions are still meaningful.
-    if len(landmarks) < 3:
-        point_value = 0.5 / len(landmarks)
-        print(f"Few frames detected, adjusting point value to {point_value:.4f}")
+    # Define the proportion of total weight for each period
+    late_weight_proportion = 0.6  # Last 2s account for 60% of the score importance
+    early_weight_proportion = 1.0 - late_weight_proportion # First 8s account for 40%
 
+    # Calculate how many *actual* frames fall into late period (proportionally)
+    # Use actual interval if significantly different from 10?
+    # For now, assume interval is close to 10 and base proportion on that.
+    # If interval is very different, this might need adjustment.
+    if interval > 0:
+        late_frames_ratio = late_period_duration / interval
+    else:
+        # If interval is 0, fallback to assuming 10s, or handle error
+        print("Warning: Interval is 0, assuming 10s for frame ratio calculation.")
+        late_frames_ratio = late_period_duration / 10.0 if num_landmarks > 0 else 0
+
+    num_late_frames = round(num_landmarks * late_frames_ratio)
+    # Ensure at least one frame is in late period if possible and ratio > 0
+    if late_frames_ratio > 0 and num_late_frames == 0 and num_landmarks > 0:
+        num_late_frames = 1
+    # Ensure late frames don't exceed total frames
+    num_late_frames = min(num_late_frames, num_landmarks)
+
+    num_early_frames = num_landmarks - num_late_frames
+
+    # Calculate weight per frame in each period
+    weight_per_early_frame = 0.0
+    weight_per_late_frame = 0.0
+    total_weight_sum = 1.0 # The total potential penalty sum
+
+    if num_early_frames > 0:
+        weight_per_early_frame = (total_weight_sum * early_weight_proportion) / num_early_frames
+    else:
+        # If no early frames, distribute early weight proportion to late frames
+        if num_late_frames > 0:
+            late_weight_proportion += early_weight_proportion # Give all weight to late frames
+            early_weight_proportion = 0.0
+
+    if num_late_frames > 0:
+        weight_per_late_frame = (total_weight_sum * late_weight_proportion) / num_late_frames
+    else:
+         # If somehow no late frames (e.g., very few total frames assigned early), distribute late weight to early
+        if num_early_frames > 0:
+            early_weight_proportion += late_weight_proportion # Give all weight to early frames
+            late_weight_proportion = 0.0
+            # Recalculate early weight per frame
+            weight_per_early_frame = (total_weight_sum * early_weight_proportion) / num_early_frames
+
+
+    print(f"Total frames: {num_landmarks}")
+    print(f"Frames assigned to early period ({early_period_duration}s): {num_early_frames}, Weight per frame: {weight_per_early_frame:.4f}")
+    print(f"Frames assigned to late period ({late_period_duration}s): {num_late_frames}, Weight per frame: {weight_per_late_frame:.4f}")
+
+    # --- Score Calculation Loop ---
     score = 1.0
     prev_frame = None
+    start_index_late = num_early_frames # Index where late period begins
 
-    print(f"Starting attention calculation for {len(landmarks)} frames")
-    print(f"Each frame is worth {point_value:.4f} points")
+    print(f"\nStarting attention calculation with weighted frames...")
 
     for frame_idx, frame in enumerate(landmarks):
+        # Determine the weight for the current frame
+        is_late_frame = frame_idx >= start_index_late
+        current_frame_weight = weight_per_late_frame if is_late_frame else weight_per_early_frame
+        period_name = "LATE" if is_late_frame else "EARLY"
+
         # Extract the actual set of landmarks from the frame
         landmarks_in_frame = get_frame_landmarks(frame)
-        print(f"Processing frame {frame_idx} with {len(landmarks_in_frame)} landmarks")
+        print(f"\nProcessing Frame {frame_idx} ({period_name}) - Weight: {current_frame_weight:.4f}")
+        print(f"  Landmarks found: {len(landmarks_in_frame)}")
 
         # Check for empty data
         if not landmarks_in_frame or len(landmarks_in_frame) < 5:
-            print(f"Frame {frame_idx}: Insufficient data, deducting points for missing detection")
-            score -= 0.3 * point_value
+            deduction = 0.3 * current_frame_weight
+            score -= deduction
+            print(f"  Insufficient data, deducting {deduction:.4f}")
+            prev_frame = None # Reset prev_frame as current is invalid for movement check
             continue
 
-        # Check if a face is detected (here we use a simple heuristic; you can adjust)
-        face_detected = len(landmarks_in_frame) >= 5
+        # Check if a face is detected (simple heuristic)
+        face_detected = len(landmarks_in_frame) >= 5 # Reuse existing simple check
         if not face_detected:
-            print(f"Frame {frame_idx}: Face not detected properly, deducting 0.3 * frame value")
-            score -= 0.3 * point_value
+            deduction = 0.3 * current_frame_weight
+            score -= deduction
+            print(f"  Face not detected properly, deducting {deduction:.4f}")
+            prev_frame = None # Reset prev_frame
             continue
 
-        # Check if the subject is looking at the screen.
+        # Check orientation and movement
         try:
             is_looking, face_center, check_results = check_looking_at_screen(landmarks_in_frame)
             if not is_looking:
-                print(f"Frame {frame_idx}: Not looking at screen - {check_results}")
-                score -= 1.0 * point_value
-            # Calculate movement if previous frame exists
+                deduction = 1.0 * current_frame_weight
+                score -= deduction
+                print(f"  Not looking at screen, deducting {deduction:.4f} - {check_results}")
+                # Note: We might still check movement even if not looking
+
+            # Calculate movement if previous frame exists and was valid
             if prev_frame is not None:
-                movement = check_movement(landmarks_in_frame, get_frame_landmarks(prev_frame))
-                print(f"Frame {frame_idx}: Movement score = {movement:.4f}")
-                if movement > 0.2:
-                    deduction = 0.5 * point_value
-                    score -= deduction
-                    print(f"Frame {frame_idx}: Excessive movement (-{deduction:.4f})")
+                prev_landmarks_in_frame = get_frame_landmarks(prev_frame)
+                # Ensure previous frame also had enough landmarks for a valid comparison
+                if prev_landmarks_in_frame and len(prev_landmarks_in_frame) >= 5:
+                    movement = check_movement(landmarks_in_frame, prev_landmarks_in_frame)
+                    print(f"  Movement score = {movement:.4f}")
+                    if movement > 0.2: # Keep existing threshold
+                        deduction = 0.5 * current_frame_weight
+                        score -= deduction
+                        print(f"  Excessive movement, deducting {deduction:.4f}")
+                else:
+                     print("  Skipping movement check: Previous frame invalid.")
+            else:
+                print("  Skipping movement check: No valid previous frame.")
+
+            # Update prev_frame *only if* the current frame was valid
             prev_frame = frame
+
         except Exception as e:
-            print(f"Error processing frame {frame_idx}: {e}")
-            score -= 0.3 * point_value
+            print(f"  Error processing frame {frame_idx}: {e}")
+            # Apply a standard penalty for processing errors
+            deduction = 0.3 * current_frame_weight
+            score -= deduction
+            print(f"  Deducting {deduction:.4f} due to error.")
+            prev_frame = None # Reset prev_frame after error
 
     final_score = max(0.0, min(1.0, score))
-    print(f"Final attention score: {final_score:.4f}")
+    print(f"\nFinal attention score: {final_score:.4f}")
     return final_score
 
 
