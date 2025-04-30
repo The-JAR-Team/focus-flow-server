@@ -8,7 +8,8 @@ subscription_management, watch_management, or question_management. Below each fu
 you'll find its expected input (arguments) and output (return values).
 """
 
-from db import user_management, playlists_management, video_management, subscription_management, watch_management, question_management
+from db import user_management, playlists_management, video_management, subscription_management, watch_management, \
+    question_management, lock_management
 from db.video_management import get_accessible_videos
 
 
@@ -523,3 +524,29 @@ def get_model_results_by_video(youtube_id: str):
               {"status": "failed", "reason": "Error retrieving model results"}, 500
     """
     return watch_management.get_model_results_by_video(youtube_id)
+
+
+def acquire_lock(lock_key: str) -> bool:
+    """
+    Attempts to acquire a distributed lock by inserting a unique key into the Generation_Locks table.
+
+    Args:
+        lock_key (str): The unique identifier for the resource to lock (e.g., "youtubeId_language").
+
+    Returns:
+        bool: True if the lock was successfully acquired, False otherwise (lock already held or DB error).
+    """
+    return lock_management.acquire_lock(lock_key)
+
+
+def release_lock(lock_key: str) -> bool:
+    """
+    Releases a distributed lock by deleting the corresponding key from the Generation_Locks table.
+
+    Args:
+        lock_key (str): The unique identifier for the resource lock to release.
+
+    Returns:
+        bool: True if the lock was successfully deleted (or didn't exist), False if a DB error occurred.
+    """
+    return lock_management.release_lock(lock_key)

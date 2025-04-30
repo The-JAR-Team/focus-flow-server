@@ -4,31 +4,29 @@ import os
 import threading
 import time
 import traceback
+from typing import Dict, Any
 
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.proxies import GenericProxyConfig
-from db.db_api import store_questions_in_db, questions_ready
+from db.db_api import store_questions_in_db, questions_ready, release_lock, acquire_lock
+from db.question_management import get_questions_for_video
 from logic.gemini_api import generate
 
-# Lock mechanism to prevent duplicate generations
-generation_locks = {}  # key: "{youtube_id}_{lang}" -> Lock
-
-# Track request patterns to identify duplicates
-request_tracking = {}
 
 def sanitize_text(text: str) -> str:
-    """Clean transcript text to avoid JSON parsing issues"""
-    # Replace problematic characters that can break JSON
+    """Clean transcript text to avoid JSON parsing issues."""
+    # Basic sanitization
     return (text.replace('\r', ' ')
-                .replace('\n', ' ')
-                .replace('"', '\\"')
-                .replace('\t', ' ')
-                .replace('\\', '\\\\'))
+            .replace('\n', ' ')
+            .replace('"', '\\"')
+            .replace('\t', ' ')
+            .replace('\\', '\\\\'))
 
 
 def seconds_to_hhmmss(seconds):
-    """Convert a float (or int) number of seconds into 'HH:MM:SS' format."""
+    """Convert seconds to 'HH:MM:SS' format."""
+    if seconds is None: return "00:00:00"
     total_seconds = int(math.floor(seconds))
     hours = total_seconds // 3600
     minutes = (total_seconds % 3600) // 60
@@ -82,188 +80,229 @@ def fetch_transcript_as_string(video_id: str) -> str:
 
 def split_transcript(transcript_text, chunk_duration=1800):
     """
-    Splits the transcript into consecutive time-based chunks (0–chunk_duration,
-    chunk_duration–2*chunk_duration, etc.), each chunk being up to chunk_duration seconds long.
-
-    Each transcript block is assumed to begin with a line like:
-       "Start: HH:MM:SS, Duration: HH:MM:SS"
-    Then the text lines follow.
-
-    Returns: list of strings, each chunk containing multiple blocks if
-             those blocks' start times fit into the chunk boundary.
+    Splits the transcript into consecutive time-based chunks.
+    Parses blocks like: "Start: HH:MM:SS, Duration: HH:MM:SS\nText\n\n"
     """
+    # Split into blocks based on the double newline separator
     blocks = transcript_text.strip().split("\n\n")
+    if not blocks:
+        return []
 
-    # Convert each block into (start_seconds, block_text), so we can sort and group them.
     block_info = []
     for block in blocks:
-        if not block.strip():
+        block = block.strip()
+        if not block:
             continue
-        lines = block.split("\n")
+
+        lines = block.split('\n', 1) # Split into first line and the rest
         if not lines:
             continue
-        try:
-            # e.g. lines[0] = "Start: 00:01:48, Duration: 00:00:15"
-            first_line = lines[0]
-            start_part = first_line.split(",")[0]  # e.g. "Start: 00:01:48"
-            time_str = start_part.split("Start:")[1].strip()
-            h, m, s = map(int, time_str.split(":"))
-            block_start_seconds = h * 3600 + m * 60 + s
-        except:
-            block_start_seconds = 0
-        block_info.append((block_start_seconds, block))
 
-    # Sort by start time, just in case they're not already in chronological order.
+        first_line = lines[0]
+        block_text_content = lines[1] if len(lines) > 1 else "" # The actual text
+
+        # Parse the start time from the first line
+        try:
+            if first_line.startswith("Start:"):
+                # Extract "HH:MM:SS" part after "Start: " and before the first comma
+                time_str = first_line.split("Start:")[1].split(",")[0].strip()
+                h, m, s = map(int, time_str.split(':'))
+                block_start_seconds = h * 3600 + m * 60 + s
+                # Store the start time and the original full block text
+                block_info.append((block_start_seconds, block))
+            else:
+                print(f"Warning: Skipping block without expected 'Start:' prefix: {first_line}")
+        except (ValueError, IndexError) as e:
+            print(f"Warning: Could not parse timestamp from block header '{first_line}': {e}")
+            continue # Skip blocks with unparsable headers
+
+    if not block_info: # Handle case where no blocks had valid headers
+        print("Warning: No blocks with valid timestamps found for splitting.")
+        return []
+
+    # Sort blocks by their start time
     block_info.sort(key=lambda x: x[0])
 
+    # Group blocks into time-based chunks
     chunks = []
-    current_chunk_blocks = []
-    # The boundary for the first chunk
-    chunk_start = 0
-    chunk_end = chunk_duration
+    current_chunk_blocks_text = []
+    # Initialize based on the first block's time
+    chunk_start_time = block_info[0][0]
+    chunk_end_time = chunk_start_time + chunk_duration
 
-    for start_sec, block_text in block_info:
-        # If the current block belongs to a future chunk, flush the current chunk first.
-        while start_sec >= chunk_end:
-            if current_chunk_blocks:
-                # finalize the current chunk
-                chunks.append("\n\n".join(current_chunk_blocks))
-                current_chunk_blocks = []
-            # Advance the chunk boundaries
-            chunk_start = chunk_end
-            chunk_end += chunk_duration
+    for start_sec, full_block_text in block_info:
+        # Finalize previous chunk if current block starts after its end time
+        while start_sec >= chunk_end_time:
+            if current_chunk_blocks_text:
+                chunks.append("\n\n".join(current_chunk_blocks_text)) # Join blocks with original separator
+            current_chunk_blocks_text = [] # Reset for next chunk
+            # Advance chunk boundaries
+            chunk_start_time = chunk_end_time
+            chunk_end_time += chunk_duration
 
-        current_chunk_blocks.append(block_text)
+        # Add the full block text to the current chunk
+        current_chunk_blocks_text.append(full_block_text)
 
-    # Flush any leftover blocks into a final chunk
-    if current_chunk_blocks:
-        chunks.append("\n\n".join(current_chunk_blocks))
+    # Add the last chunk if it has content
+    if current_chunk_blocks_text:
+        chunks.append("\n\n".join(current_chunk_blocks_text))
 
     return chunks
 
 
-def generate_questions_from_transcript(youtube_id: str, lang="Hebrew", chunk_duration=1200):
+# --- Private Generation Function ---
+def _generate_and_store_questions(youtube_id: str, lang="Hebrew", chunk_duration=1200, max_retries=5):
     """
-    Splits the transcript into multiple consecutive 30-minute (by default) chunks,
-    processes them in parallel, and combines all resulting questions.
+    Internal: Fetches, splits, generates questions via threads, stores in DB.
+    Returns dict: {"questions": list, "error": str_or_none}
+    """
+    print(f"Starting generation process for {youtube_id} ({lang})...")
+    all_questions = []
+    return_message = None  # Used to ensure single return point
 
-    Example return:
-      {
-        "questions": [
-          { "q_id": "q1", "question_origin": "...", "question": "...", "answer1": "..." },
-          ...
-        ],
-        "error": <error message if any, otherwise omitted>
-      }
-    """
-    # Track caller to identify source of duplicate requests
-    stack = traceback.extract_stack()
-    caller_info = f"{stack[-2].name}:{stack[-2].lineno}" if len(stack) > 1 else "unknown"
-    
-    # Log request info
-    request_key = f"{youtube_id}_{lang}"
-    request_count = request_tracking.get(request_key, 0) + 1
-    request_tracking[request_key] = request_count
-    print(f"[DEBUG] Request #{request_count} for {request_key} from caller {caller_info}")
-    
     try:
         transcript_text = fetch_transcript_as_string(youtube_id)
         chunks = split_transcript(transcript_text, chunk_duration)
+        if not chunks: raise ValueError("Transcript yielded no processable chunks.")
 
+        print(f"Transcript split into {len(chunks)} chunks for {youtube_id} ({lang}).")
         results = [None] * len(chunks)
 
-        def worker(i, chunk_text):
-            result_str = ""  # ensure defined for error logging
-            try:
-                # Sanitize text before sending to the model
-                clean_chunk = sanitize_text(chunk_text)
-                result_str = generate(text_file=clean_chunk, lang=lang)
-                result_dict = json.loads(result_str)
-                questions = result_dict.get("questions", [])
-            except json.JSONDecodeError as e:
-                # one retry
+        def worker(index, chunk_text):
+            """Processes a single chunk to generate questions with retries."""
+            thread_questions = []
+            last_error = None
+            for attempt in range(max_retries):
+                result_str = ""
                 try:
-                    time.sleep(0.5)  # Increased delay on retry
                     clean_chunk = sanitize_text(chunk_text)
-                    result_str = generate(text_file=clean_chunk, lang=lang)
+                    result_str = generate(text_file=clean_chunk, lang=lang)  # Call AI
                     result_dict = json.loads(result_str)
-                    questions = result_dict.get("questions", [])
-                except Exception as ex2:
-                    print(f"Retry failed for chunk {i+1}: {ex2}")
-                    questions = []
-            except Exception as ex:
-                print(f"Worker#{i} fatal error: {ex}")
-                questions = []
-            results[i] = questions
+                    thread_questions = result_dict.get("questions", [])
+                    last_error = None
+                    break  # Success
+                except (json.JSONDecodeError, Exception) as e:
+                    last_error = e
+                    if isinstance(e, json.JSONDecodeError): print(f"   Raw result: '{result_str[:200]}...'")
+                    if attempt < max_retries - 1:
+                        sleep_time = 0.5 * (2 ** attempt)  # Exponential backoff
+                        time.sleep(sleep_time)
+                    else:
+                        print(
+                            f"Worker {index + 1} for {youtube_id} ({lang}) failed after {max_retries} attempts. Last error: {last_error}")
+            results[index] = thread_questions  # Store result (empty list if all retries failed)
 
-        # Start a thread for each chunk.
         threads = []
         for i, chunk_text in enumerate(chunks):
-            t = threading.Thread(target=worker, args=(i, chunk_text))
+            t = threading.Thread(target=worker, args=(i, chunk_text), name=f"GenWorker-{youtube_id}-{lang}-{i + 1}")
             t.start()
             threads.append(t)
+        for t in threads: t.join()  # Wait for all threads
 
-        # Wait for all threads to finish.
-        for t in threads:
-            t.join()
-
-        # Combine questions from all chunks (without deduping).
-        all_questions = []
+        # Combine results
         for q_list in results:
-            if q_list:
-                all_questions.extend(q_list)
+            if isinstance(q_list, list): all_questions.extend(q_list)
+        print(f"Total questions generated across all chunks for {youtube_id} ({lang}): {len(all_questions)}")
 
-        # Store the questions in the database.
-        store_questions_in_db(youtube_id, lang, all_questions)
-
-        # If we got nothing back, let the caller know.
-        if not all_questions:
-            return {"questions": [], "error": "No questions generated. See server logs for details."}
-
-        print(f"Finished generation for {lang}. Found {len(all_questions)} questions total.")
-        return {"questions": all_questions}
-    except Exception as e:
-        print(f"Error in generate_questions_from_transcript for {youtube_id} ({lang}): {e}")
-        return {"questions": [], "error": str(e)}
-
-
-def gen_if_empty(youtube_id: str, lang="Hebrew"):
-    """
-    Generate questions if none exist, using locks to prevent duplicate requests.
-    """
-    # Get a lock for this specific youtube_id and language combination
-    key = f"{youtube_id}_{lang}"
-    
-    # Create a new lock if this is the first time we're seeing this combination
-    if key not in generation_locks:
-        generation_locks[key] = threading.Lock()
-    
-    lock = generation_locks[key]
-
-    # Check if questions already exist - quick check before acquiring lock
-    question_count = questions_ready(youtube_id, lang)
-    if question_count > 0:
-        return None
-        
-    if not lock.acquire(blocking=False):
-        return {"questions": [], "error": "Generation already in progress"}
-        
-    try:
-        # Double-check if questions exist now that we have the lock
-        question_count_in_lock = questions_ready(youtube_id, lang)
-        if question_count_in_lock == 0:
-            generation_result = generate_questions_from_transcript(youtube_id, lang)
-            if generation_result and "error" in generation_result and generation_result["error"]:
-                return generation_result
-            elif generation_result:
-                return generation_result
+        # Store results and check success
+        if all_questions:
+            store_result = store_questions_in_db(youtube_id, lang, all_questions)
+            if store_result != 0:  # Check for non-zero success (adjust if DB function returns bool)
+                return_message = {"questions": all_questions}  # Success state
             else:
-                return {"questions": [], "error": "Internal generation error"}
+                db_error_msg = f"DB storage function returned failure code ({store_result}) for {youtube_id} ({lang})."
+                print(db_error_msg)
+                return_message = {"questions": all_questions,
+                                  "error": db_error_msg}  # Partial success (generated but not stored)
         else:
-            return None
-    except Exception as e:
-        print(f"Exception occurred during locked generation for {key}: {e}")
-        return {"questions": [], "error": f"Generation failed: {e}"}
-    finally:
-        lock.release()
+            # No questions generated by AI or no chunks processed
+            error_msg = "No questions were generated by the AI model." if len(
+                chunks) > 0 else "No transcript chunks to process."
+            return_message = {"questions": [], "error": error_msg}
 
+    except Exception as e:
+        # Catch errors during fetch/split or other main thread issues
+        print(f"Error in _generate_and_store_questions for {youtube_id} ({lang}): {e}")
+        traceback.print_exc()
+        return_message = {"questions": [], "error": f"Generation process failed: {str(e)}"}
+
+    # Final check and return
+    if return_message is None:
+        print(f"Warning: Reached end of _generate_and_store_questions for {youtube_id} ({lang}) unexpectedly.")
+        return_message = {"questions": [], "error": "Unknown internal generation state."}
+    return return_message
+
+
+def get_or_generate_questions(youtube_id: str, lang: str = "Hebrew") -> Dict[str, Any]:
+    """
+    Gets existing questions or generates them if needed, handling distributed locking.
+
+    Returns:
+        Dict[str, Any]: {"questions": list, "status": str, "reason": str}
+            status: "success", "failed", "blocked"
+    """
+    lock_key = f"{youtube_id}_{lang}"
+    response_payload = {
+        "questions": [],
+        "status": "failed",
+        "reason": "An unexpected error occurred."
+    }
+    lock_acquired = False
+
+    try:
+        lock_acquired = acquire_lock(lock_key)
+
+        if not lock_acquired:
+            response_payload["status"] = "blocked"
+            response_payload["reason"] = "Generation already in progress by another request."
+        else:
+            if questions_ready(youtube_id, lang) > 0:
+                fetched_data = get_questions_for_video(youtube_id, lang)
+
+                if (isinstance(fetched_data, dict) and
+                        "video_questions" in fetched_data and
+                        isinstance(fetched_data["video_questions"], dict) and
+                        "questions" in fetched_data["video_questions"] and
+                        isinstance(fetched_data["video_questions"]["questions"], list)):
+
+                    response_payload["questions"] = fetched_data["video_questions"][
+                        "questions"]  # Extract the nested list
+                    response_payload["status"] = "success"
+                    response_payload["reason"] = ""
+                    print(
+                        f"Successfully fetched {len(response_payload['questions'])} existing questions for {lock_key}.")
+                else:
+                    response_payload[
+                        "reason"] = "Failed to fetch or parse existing questions from DB (unexpected format)."
+                    print(
+                        f"Failed to fetch existing questions for {lock_key}. Fetch result format: {type(fetched_data)}")
+                    if isinstance(fetched_data, dict):
+                        print(f"Fetched data keys: {fetched_data.keys()}")
+            else:
+                generation_result = _generate_and_store_questions(youtube_id, lang)  # This returns a dict
+
+                if isinstance(generation_result, dict) and "error" not in generation_result:
+                    response_payload["questions"] = generation_result.get("questions", [])
+                    response_payload["status"] = "success"
+                    response_payload["reason"] = ""
+                elif isinstance(generation_result, dict) and "error" in generation_result:
+                    response_payload["status"] = "failed"
+                    response_payload["reason"] = generation_result["error"]
+                else:
+                    response_payload["status"] = "failed"
+                    response_payload["reason"] = "Generation function returned an unexpected result."
+
+    except Exception as e:
+        print(f"Error in get_or_generate_questions for {lock_key}: {e}")
+        traceback.print_exc()
+        response_payload["status"] = "failed"
+        response_payload["reason"] = f"An unexpected error occurred: {str(e)}"
+    finally:
+        if lock_acquired:
+            print(f"Releasing lock for {lock_key}...")
+            if not release_lock(lock_key):
+                print(f"Warning: Failed to release lock for {lock_key}.")
+            else:
+                print(f"Lock released for {lock_key}.")
+
+    return response_payload

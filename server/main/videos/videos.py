@@ -1,8 +1,10 @@
 import threading
+import traceback
+
 from flask import Blueprint, request, jsonify
 from db.db_api import (upload_video, update_video_details, remove_from_playlist,
                        get_all_videos_user_can_access, get_questions_for_video_api)
-from logic.transcript_maker import generate_questions_from_transcript, gen_if_empty
+from logic.transcript_maker import get_or_generate_questions
 from server.main.utils import get_authenticated_user, check_authenticated_video
 
 videos_bp = Blueprint('videos', __name__)
@@ -10,29 +12,59 @@ videos_bp = Blueprint('videos', __name__)
 
 @videos_bp.route('/videos/upload', methods=['POST'])
 def upload():
-    resp, user_id, status = get_authenticated_user()
-    if resp is not None:
-        return resp, status
+    """
+    Handles video upload metadata and triggers background question generation.
+    Ensures a single return point.
+    """
+    response_payload = {"status": "failed", "message": "Upload failed"}  # Default response
+    status_code = 500  # Default status
+
+    auth_resp, user_id, auth_status = get_authenticated_user()
+    if auth_resp is not None:
+        return auth_resp, auth_status  # Return authentication error directly
 
     data = request.get_json()
-    response, code = upload_video(data, user_id)
+    if not data:
+        response_payload = {"status": "failed", "message": "Invalid JSON payload."}
+        status_code = 400
+    else:
+        try:
+            # Store video metadata
+            response_payload, status_code = upload_video(data, user_id)
 
-    # After a successful upload, start background threads to generate questions
-    if code == 200:
-        video_id = data.get("video_id")
-        if video_id:
-            def async_generate(lang):
-                try:
-                    gen_if_empty(youtube_id=video_id, lang=lang)
-                except Exception as e:
-                    print(f"Error generating questions for {lang}: {e}")
+            # After a successful upload, trigger background generation
+            if status_code in [200, 201]:
+                video_id = data.get("video_id")
+                if video_id:
+                    print(f"Upload successful for {video_id}. Triggering background generation...")
 
-            thread_en = threading.Thread(target=async_generate, args=("English",))
-            thread_he = threading.Thread(target=async_generate, args=("Hebrew",))
-            thread_en.start()
-            thread_he.start()
+                    def trigger_generation(vid_id, lang):
+                        """Target function for background thread."""
+                        try:
+                            result = get_or_generate_questions(youtube_id=vid_id, lang=lang)
+                            print(
+                                f"Background generation trigger completed for {vid_id} ({lang}). Status: {result.get('status')}")
+                        except Exception as e:
+                            print(f"Error in background generation thread for {vid_id} ({lang}): {e}")
+                            traceback.print_exc()  # Log full traceback
 
-    return jsonify(response), code
+                    # Start threads for desired languages
+                    threading.Thread(target=trigger_generation, args=(video_id, "English",), daemon=True).start()
+                    threading.Thread(target=trigger_generation, args=(video_id, "Hebrew",), daemon=True).start()
+                    # Setting daemon=True allows the main app to exit even if these threads are running
+                else:
+                    print("Warning: Video upload successful but no video_id found in request data.")
+                    # Optionally modify response/status if video_id missing is an issue response_payload["warning"] =
+                    # "Video metadata stored, but generation not triggered due to missing video_id."
+
+        except Exception as e:
+            print(f"Error during video upload processing: {e}")
+            traceback.print_exc()
+            response_payload = {"status": "failed", "message": "Internal server error during upload."}
+            status_code = 500
+
+    # Single return point
+    return jsonify(response_payload), status_code
 
 
 @videos_bp.route('/videos/update', methods=['POST'])
@@ -46,6 +78,7 @@ def update():
     # and the user_id for ownership verification.
     response, code = update_video_details(data, user_id)
     return jsonify(response), code
+
 
 @videos_bp.route('/videos/remove_from_playlist', methods=['POST'])
 def remove_from_pl():
@@ -72,32 +105,55 @@ def get_accessible_videos_api():
 @videos_bp.route('/videos/<string:youtube_id>/questions', methods=['GET'])
 def get_video_questions(youtube_id):
     """
-    GET /videos/<youtube_id>/questions
-
-    Optional query parameter:
-      lang: language code (default is 'Hebrew')
-
-    This endpoint retrieves questions for the given YouTube video and language.
-    It first ensures that the authenticated user has access to the video by checking
-    against the accessible videos returned by get_accessible_videos. If not accessible,
-    it returns a 403 error.
-    If no questions exist, it calls generate_questions_from_transcript() to generate and store them.
+    Retrieves questions for the video, generating them if necessary via locking mechanism.
     """
-    # Authenticate user using session cookie.
-    message, user_id, status = get_authenticated_user()
-    if status != 200:
-        return message, status
+    response_payload = {"status": "failed", "reason": "Internal Server Error"}
+    status_code = 500
 
+    auth_resp, user_id, auth_status = get_authenticated_user()
+    if auth_resp is not None:
+        return auth_resp, auth_status
+
+    vid_access_message, vid_access_status = check_authenticated_video(youtube_id, user_id)
+    if vid_access_status != 200:
+        response_payload = vid_access_message
+        status_code = vid_access_status
     else:
-        message, status = check_authenticated_video(youtube_id, user_id)
+        lang = request.args.get("lang", "Hebrew")
+        try:
+            result_data = get_or_generate_questions(youtube_id=youtube_id, lang=lang)
+            result_status = result_data.get("status")
+            result_questions = result_data.get("questions", [])
+            result_reason = result_data.get("reason", "")
 
-        if status == 200:
-            lang = request.args.get("lang", "Hebrew")
-            # Retrieve questions from the database.
-            message = get_questions_for_video_api(youtube_id, lang)
-            # If no questions were found, generate them.
-            if not message.get("video_questions", {}).get("questions"):
-                generated = generate_questions_from_transcript(youtube_id, lang)
-                message["video_questions"] = generated
+            if result_status == "success":
+                response_payload = {
+                    "status": "success",
+                    "video_questions": {
+                        "youtube_id": youtube_id,
+                        "language": lang,
+                        "questions": result_questions
+                    }
+                }
+                status_code = 200
+            elif result_status == "blocked":
+                response_payload = {
+                    "status": "pending",
+                    "reason": result_reason,
+                    "message": "Question generation is currently in progress. Please try again shortly."
+                }
+                status_code = 202 # Accepted
+            else: # failed or unknown
+                response_payload = {
+                    "status": "failed",
+                    "reason": result_reason or "Failed to get or generate questions."
+                }
+                status_code = 500
 
-    return jsonify(message), status
+        except Exception as e:
+            print(f"Unexpected error in get_video_questions endpoint for {youtube_id} ({lang}): {e}")
+            traceback.print_exc()
+            response_payload = {"status": "failed", "reason": f"An unexpected server error occurred: {str(e)}"}
+            status_code = 500
+
+    return jsonify(response_payload), status_code

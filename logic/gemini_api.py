@@ -10,6 +10,7 @@ from google.genai import types
 # Model configuration
 DEFAULT_MODEL = "gemini-2.5-flash-preview-04-17"
 
+
 def repair_json(json_str):
     """
     Attempts to repair truncated or malformed JSON, focusing on finding the
