@@ -151,7 +151,7 @@ def split_transcript(transcript_text, chunk_duration=1800):
 
 
 # --- Private Generation Function ---
-def _generate_and_store_questions(youtube_id: str, lang="Hebrew", chunk_duration=1200, max_retries=5):
+def _generate_and_store_questions(youtube_id: str, lang="Hebrew", chunk_duration=1200, max_retries=15):
     """
     Internal: Fetches, splits, generates questions via threads, stores in DB.
     Returns dict: {"questions": list, "error": str_or_none}
@@ -179,8 +179,13 @@ def _generate_and_store_questions(youtube_id: str, lang="Hebrew", chunk_duration
                     result_str = generate(text_file=clean_chunk, lang=lang)  # Call AI
                     result_dict = json.loads(result_str)
                     thread_questions = result_dict.get("questions", [])
-                    last_error = None
-                    break  # Success
+                    if thread_questions is None or len(thread_questions) == 0:
+                        if attempt < max_retries - 1:
+                            sleep_time = 0.5 * (2 ** attempt)  # Exponential backoff
+                            time.sleep(sleep_time)
+                    else:
+                        last_error = None
+                        break  # Success
                 except (json.JSONDecodeError, Exception) as e:
                     last_error = e
                     if isinstance(e, json.JSONDecodeError): print(f"   Raw result: '{result_str[:200]}...'")
