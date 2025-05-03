@@ -5,6 +5,7 @@ import threading
 import time
 import traceback
 from typing import Dict, Any
+import multiprocessing
 
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -12,6 +13,28 @@ from youtube_transcript_api.proxies import GenericProxyConfig
 from db.db_api import store_questions_in_db, questions_ready, release_lock, acquire_lock
 from db.question_management import get_questions_for_video
 from logic.gemini_api import generate
+
+
+def generation_task_wrapper(video_id_inner, lang_inner, lock_key_inner):
+    """
+    Wrapper executes the generation task and ensures lock release.
+    Intended to be the target for the background process.
+    """
+    print(f"Background process starting for {lock_key_inner}")
+    try:
+        load_dotenv()
+        _generate_and_store_questions(video_id_inner, lang_inner)
+        print(f"Background process finished task successfully for {lock_key_inner}.")
+    except Exception as task_e:
+        print(f"Error during background process task for {lock_key_inner}: {task_e}")
+        traceback.print_exc()
+    finally:
+        print(f"Background process attempting to release lock for {lock_key_inner}.")
+        if not release_lock(lock_key_inner):
+            print(f"Warning: Background process failed to release lock for {lock_key_inner}.")
+        else:
+            print(f"Background process released lock for {lock_key_inner}.")
+        print(f"Background process exiting for {lock_key_inner}.")
 
 
 def sanitize_text(text: str) -> str:
@@ -94,12 +117,12 @@ def split_transcript(transcript_text, chunk_duration=1800):
         if not block:
             continue
 
-        lines = block.split('\n', 1) # Split into first line and the rest
+        lines = block.split('\n', 1)  # Split into first line and the rest
         if not lines:
             continue
 
         first_line = lines[0]
-        block_text_content = lines[1] if len(lines) > 1 else "" # The actual text
+        block_text_content = lines[1] if len(lines) > 1 else ""  # The actual text
 
         # Parse the start time from the first line
         try:
@@ -114,9 +137,9 @@ def split_transcript(transcript_text, chunk_duration=1800):
                 print(f"Warning: Skipping block without expected 'Start:' prefix: {first_line}")
         except (ValueError, IndexError) as e:
             print(f"Warning: Could not parse timestamp from block header '{first_line}': {e}")
-            continue # Skip blocks with unparsable headers
+            continue  # Skip blocks with unparsable headers
 
-    if not block_info: # Handle case where no blocks had valid headers
+    if not block_info:  # Handle case where no blocks had valid headers
         print("Warning: No blocks with valid timestamps found for splitting.")
         return []
 
@@ -134,8 +157,8 @@ def split_transcript(transcript_text, chunk_duration=1800):
         # Finalize previous chunk if current block starts after its end time
         while start_sec >= chunk_end_time:
             if current_chunk_blocks_text:
-                chunks.append("\n\n".join(current_chunk_blocks_text)) # Join blocks with original separator
-            current_chunk_blocks_text = [] # Reset for next chunk
+                chunks.append("\n\n".join(current_chunk_blocks_text))  # Join blocks with original separator
+            current_chunk_blocks_text = []  # Reset for next chunk
             # Advance chunk boundaries
             chunk_start_time = chunk_end_time
             chunk_end_time += chunk_duration
@@ -240,71 +263,81 @@ def _generate_and_store_questions(youtube_id: str, lang="Hebrew", chunk_duration
 
 def get_or_generate_questions(youtube_id: str, lang: str = "Hebrew") -> Dict[str, Any]:
     """
-    Gets existing questions or generates them if needed, handling distributed locking.
+    Gets existing questions or starts generation in a background thread if needed,
+    handling distributed locking.
 
     Returns:
         Dict[str, Any]: {"questions": list, "status": str, "reason": str}
-            status: "success", "failed", "blocked"
+            status: "success" (existing questions found),
+                    "failed" (error occurred),
+                    "blocked" (generation in progress or starting now)
     """
     lock_key = f"{youtube_id}_{lang}"
     response_payload = {
         "questions": [],
-        "status": "failed",
+        "status": "failed",  # Default to failed
         "reason": "An unexpected error occurred."
     }
     lock_acquired = False
 
     try:
         lock_acquired = acquire_lock(lock_key)
-
         if not lock_acquired:
             response_payload["status"] = "blocked"
             response_payload["reason"] = "Generation already in progress by another request."
         else:
             if questions_ready(youtube_id, lang) > 0:
                 fetched_data = get_questions_for_video(youtube_id, lang)
-
                 if (isinstance(fetched_data, dict) and
                         "video_questions" in fetched_data and
                         isinstance(fetched_data["video_questions"], dict) and
                         "questions" in fetched_data["video_questions"] and
                         isinstance(fetched_data["video_questions"]["questions"], list)):
 
-                    response_payload["questions"] = fetched_data["video_questions"][
-                        "questions"]  # Extract the nested list
+                    response_payload["questions"] = fetched_data["video_questions"]["questions"]
                     response_payload["status"] = "success"
                     response_payload["reason"] = ""
                     print(
                         f"Successfully fetched {len(response_payload['questions'])} existing questions for {lock_key}.")
                 else:
-                    response_payload[
-                        "reason"] = "Failed to fetch or parse existing questions from DB (unexpected format)."
+                    response_payload["status"] = "failed"
+                    response_payload["reason"] = ("Failed to fetch or parse existing questions from DB (unexpected "
+                                                  "format) despite holding lock.")
                     print(
                         f"Failed to fetch existing questions for {lock_key}. Fetch result format: {type(fetched_data)}")
                     if isinstance(fetched_data, dict):
                         print(f"Fetched data keys: {fetched_data.keys()}")
             else:
-                generation_result = _generate_and_store_questions(youtube_id, lang)  # This returns a dict
+                print(f"No existing questions for {lock_key}. Starting generation process.")
 
-                if isinstance(generation_result, dict) and "error" not in generation_result:
-                    response_payload["questions"] = generation_result.get("questions", [])
-                    response_payload["status"] = "success"
-                    response_payload["reason"] = ""
-                elif isinstance(generation_result, dict) and "error" in generation_result:
-                    response_payload["status"] = "failed"
-                    response_payload["reason"] = generation_result["error"]
-                else:
-                    response_payload["status"] = "failed"
-                    response_payload["reason"] = "Generation function returned an unexpected result."
+                generation_process = multiprocessing.Process(
+                    target=generation_task_wrapper,
+                    args=(youtube_id, lang, lock_key),
+                    name=f"DaemonGenProcess-{lock_key}"
+                )
+                generation_process.daemon = True
+                generation_process.start()
+
+                response_payload["status"] = "blocked"
+                response_payload["reason"] = "Started generation of questions"
+
+                lock_acquired = False
 
     except Exception as e:
         print(f"Error in get_or_generate_questions for {lock_key}: {e}")
         traceback.print_exc()
-        response_payload["status"] = "failed"
-        response_payload["reason"] = f"An unexpected error occurred: {str(e)}"
+        if response_payload["status"] not in ["success", "blocked"]:
+            response_payload["status"] = "failed"
+        if response_payload["reason"] == "An unexpected error occurred.":
+            response_payload["reason"] = f"An unexpected error occurred: {str(e)}"
+
     finally:
         if lock_acquired:
             if not release_lock(lock_key):
-                print(f"Warning: Failed to release lock for {lock_key}.")
+                print(f"Warning: Main thread failed to release lock for {lock_key} in finally block.")
+            else:
+                print(
+                    f"Main thread released lock for {lock_key} in finally block (likely due to fetching existing data "
+                    f"or an error before generation).")
 
     return response_payload
