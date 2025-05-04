@@ -32,17 +32,11 @@ def upload_video(data, user_id):
         with DB.get_cursor() as cur:
             # Insert the new video into the Video table.
             cur.execute("""
-                INSERT INTO "Video" (name, description, subject_name, added_date, youtube_id, upload_by, "length")
-                VALUES (%s, %s, %s, NOW(), %s, %s, %s::interval)
-                ON CONFLICT (youtube_id) DO UPDATE SET
-                    name = EXCLUDED.name,
-                    description = EXCLUDED.description,
-                    subject_name = EXCLUDED.subject_name,
-                    upload_by = EXCLUDED.upload_by,
-                    length = EXCLUDED.length,
-                    added_date = NOW() -- Update added_date on conflict too? Or keep original?
-                RETURNING video_id
-            """, (video_name, description, subject, youtube_video_id, uploadby, length_str))
+                            INSERT INTO "Video" (name, description, subject_name, added_date, youtube_id, upload_by, "length")
+                            VALUES (%s, %s, %s, NOW(), %s, %s, %s::interval)
+                            RETURNING video_id
+                        """, (video_name, description, subject, youtube_video_id, uploadby, length_str))
+            # --- End of reverted logic ---
 
             result = cur.fetchone()
             if result is None:
@@ -74,7 +68,6 @@ def upload_video(data, user_id):
                 cur.execute("""
                     INSERT INTO "Playlist_Item" (playlist_id, video_id)
                     VALUES (%s, %s)
-                    ON CONFLICT (playlist_id, video_id) DO NOTHING
                 """, (playlist_id, new_video_id))
 
             # Commit is handled automatically by context manager on successful exit
