@@ -299,32 +299,29 @@ def get_playlist_subscriber_count(owner_id, playlist_id):
                 { "status": "failed", "reason": <error message> }
     """
     try:
-        conn = DB.get_connection()
-        cur = conn.cursor()
+        with DB.get_cursor() as cur:
+            # Verify ownership
+            cur.execute('SELECT user_id FROM "Playlist" WHERE playlist_id = %s', (playlist_id,))
+            row = cur.fetchone()
+            if row is None:
+                return {"status": "failed", "reason": "Playlist not found"}, 404
 
-        # Verify ownership
-        cur.execute('SELECT user_id FROM "Playlist" WHERE playlist_id = %s', (playlist_id,))
-        row = cur.fetchone()
-        if row is None:
-            return {"status": "failed", "reason": "Playlist not found"}, 404
+            playlist_owner = row[0]
+            if playlist_owner != owner_id:
+                return {"status": "failed", "reason": "Not authorized to view subscriber for this playlist"}, 403
 
-        playlist_owner = row[0]
-        if playlist_owner != owner_id:
-            return {"status": "failed", "reason": "Not authorized to view subscriber for this playlist"}, 403
+            # Count the subscribers
+            cur.execute(
+                '''
+                SELECT COUNT(*)
+                FROM "Subscription"
+                WHERE playlist_id = %s
+                ''',
+                (playlist_id,)
+            )
+            count = cur.fetchone()[0]
 
-        # Count the subscribers
-        cur.execute(
-            '''
-            SELECT COUNT(*)
-            FROM "Subscription"
-            WHERE playlist_id = %s
-            ''',
-            (playlist_id,)
-        )
-        count = cur.fetchone()[0]
-
-        return {"status": "success", "count": count}, 200
-
+            return {"status": "success", "count": count}, 200
     except Exception as e:
         print("Error in get_playlist_subscriber_count:", e)
         return {"status": "failed", "reason": str(e)}, 500

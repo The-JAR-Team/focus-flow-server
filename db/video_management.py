@@ -155,6 +155,7 @@ def update_video_details(data, user_id):
         # Rollback is handled automatically by context manager on exception
         return {"status": "failed", "reason": "failed to update video details"}, 500
 
+
 def get_accessible_videos(user_id):
     """
     Returns a nested JSON-like structure of all playlists (and their videos)
