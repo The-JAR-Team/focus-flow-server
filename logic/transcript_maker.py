@@ -5,8 +5,6 @@ import threading
 import time
 import traceback
 from typing import Dict, Any
-import multiprocessing
-
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.proxies import GenericProxyConfig
@@ -18,23 +16,25 @@ from logic.gemini_api import generate
 def generation_task_wrapper(video_id_inner, lang_inner, lock_key_inner):
     """
     Wrapper executes the generation task and ensures lock release.
-    Intended to be the target for the background process.
+    Intended to be the target for the background thread.
     """
-    print(f"Background process starting for {lock_key_inner}")
+    print(f"Background thread starting for {lock_key_inner} [PID: {os.getpid()}]")
     try:
-        load_dotenv()
+        # Ensure any required setup for the thread is done here if needed
+        # e.g., load_dotenv() if env vars aren't inherited reliably
         _generate_and_store_questions(video_id_inner, lang_inner)
-        print(f"Background process finished task successfully for {lock_key_inner}.")
+        print(f"Background thread finished task successfully for {lock_key_inner}.")
     except Exception as task_e:
-        print(f"Error during background process task for {lock_key_inner}: {task_e}")
+        print(f"Error during background thread task for {lock_key_inner}: {task_e}")
         traceback.print_exc()
     finally:
-        print(f"Background process attempting to release lock for {lock_key_inner}.")
+        # Ensure lock is released *by the thread* after its work is done or if it fails
+        print(f"Background thread attempting to release lock for {lock_key_inner}.")
         if not release_lock(lock_key_inner):
-            print(f"Warning: Background process failed to release lock for {lock_key_inner}.")
+             print(f"Warning: Background thread failed to release lock for {lock_key_inner}.")
         else:
-            print(f"Background process released lock for {lock_key_inner}.")
-        print(f"Background process exiting for {lock_key_inner}.")
+            print(f"Background thread released lock for {lock_key_inner}.")
+        print(f"Background thread exiting for {lock_key_inner}.")
 
 
 def sanitize_text(text: str) -> str:
@@ -308,15 +308,15 @@ def get_or_generate_questions(youtube_id: str, lang: str = "Hebrew") -> Dict[str
                     if isinstance(fetched_data, dict):
                         print(f"Fetched data keys: {fetched_data.keys()}")
             else:
-                print(f"No existing questions for {lock_key}. Starting generation process.")
+                print(f"No existing questions for {lock_key}. Starting background generation thread.")
 
-                generation_process = multiprocessing.Process(
+                generation_thread = threading.Thread(
                     target=generation_task_wrapper,
                     args=(youtube_id, lang, lock_key),
-                    name=f"DaemonGenProcess-{lock_key}"
+                    name=f"DaemonGenThread-{lock_key}"
                 )
-                generation_process.daemon = True
-                generation_process.start()
+                generation_thread.daemon = True
+                generation_thread.start()
 
                 response_payload["status"] = "blocked"
                 response_payload["reason"] = "Started generation of questions"

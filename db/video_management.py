@@ -1,170 +1,166 @@
 import datetime
+import logging
+
 from db.DB import DB
+
+logger = logging.getLogger(__name__)
 
 
 def upload_video(data, user_id):
     """
-    Uploads a video and associates it with one or more playlists.
-
-    Expects a JSON payload like:
-    {
-        "video_id": "2tM1LFFxeKg",      // goes into Video.youtube_id
-        "video_name": "What makes muscles grow?",
-        "subject": "Health",
-        "playlists": ["Playlist A", "Playlist B"], // Array of playlist names
-        "description": "Some description...",
-        "length": "00:12:34",           // Will be cast to INTERVAL
-        "uploadby": "Prof. Jane AI"
-    }
-
-    The user_id (an int) is provided separately for playlist lookup.
-
-    Inserts the video into the Video table and, for each playlist name:
-      - Looks for an existing playlist with that name for the given user_id.
-      - If not found, creates a new playlist.
-      - Inserts a row in Playlist_Item linking the video and the playlist.
-
-    Returns a tuple: (response_dict, http_status_code)
+    Uploads a video and associates it with playlists using the DB context manager.
     """
+    # Parse fields from the data payload.
+    youtube_video_id = data.get("video_id")
+    video_name = data.get("video_name")
+    subject = data.get("subject")
+    playlists = data.get("playlists") # Expected list of names
+    description = data.get("description")
+    length_str = data.get("length")
+    uploadby = data.get("uploadby")
+
+    # --- Input Validation ---
+    if not all([youtube_video_id, video_name, subject, playlists, length_str]):
+        return {"status": "failed", "reason": "Missing required video fields (video_id, name, subject, playlists, length)."}, 400
+    if not isinstance(playlists, list) or len(playlists) == 0:
+        return {"status": "failed", "reason": "Playlists must be a non-empty list of names."}, 400
+
+    new_video_id = None # Initialize
     try:
-        conn = DB.get_connection()
-        cur = conn.cursor()
-
-        # Parse fields from the data payload.
-        youtube_video_id = data.get("video_id")
-        video_name = data.get("video_name")
-        subject = data.get("subject")
-        playlists = data.get("playlists")  # Expected to be an array of playlist names.
-        description = data.get("description")
-        length_str = data.get("length")  # Example: "00:12:34"
-        uploadby = data.get("uploadby")
-
-        # Check that 'playlists' is provided and not empty
-        if not playlists or len(playlists) == 0:
-            return {"status": "failed", "reason": "No playlists provided."}, 400
-
-        # Insert the new video into the Video table.
-        # Note: the "length" column is of type INTERVAL, so we cast the string.
-        cur.execute("""
-            INSERT INTO "Video" (name, description, subject_name, added_date, youtube_id, upload_by, "length")
-            VALUES (%s, %s, %s, NOW(), %s, %s, %s::interval)
-            RETURNING video_id
-        """, (video_name, description, subject, youtube_video_id, uploadby, length_str))
-
-        new_video_id = cur.fetchone()[0]
-
-        # Process each playlist in the provided playlists array.
-        for pl_name in playlists:
-            # Look for an existing playlist with this name for the given user.
+        # --- Use the context manager ---
+        # A single transaction for the entire upload process
+        with DB.get_cursor() as cur:
+            # Insert the new video into the Video table.
             cur.execute("""
-                SELECT playlist_id FROM "Playlist"
-                WHERE playlist_name = %s AND user_id = %s
-            """, (pl_name, user_id))
-            row = cur.fetchone()
-            if row is None:
-                # Create a new playlist if not found.
+                INSERT INTO "Video" (name, description, subject_name, added_date, youtube_id, upload_by, "length")
+                VALUES (%s, %s, %s, NOW(), %s, %s, %s::interval)
+                ON CONFLICT (youtube_id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    description = EXCLUDED.description,
+                    subject_name = EXCLUDED.subject_name,
+                    upload_by = EXCLUDED.upload_by,
+                    length = EXCLUDED.length,
+                    added_date = NOW() -- Update added_date on conflict too? Or keep original?
+                RETURNING video_id
+            """, (video_name, description, subject, youtube_video_id, uploadby, length_str))
+
+            result = cur.fetchone()
+            if result is None:
+                # Should not happen with RETURNING if INSERT/UPDATE worked
+                 raise Exception("Failed to insert or update video record.")
+            new_video_id = result[0]
+
+            # Process each playlist in the provided playlists array.
+            for pl_name in playlists:
+                # Look for an existing playlist with this name for the given user.
                 cur.execute("""
-                    INSERT INTO "Playlist" (playlist_name, user_id)
-                    VALUES (%s, %s)
-                    RETURNING playlist_id
+                    SELECT playlist_id FROM "Playlist"
+                    WHERE playlist_name = %s AND user_id = %s
                 """, (pl_name, user_id))
-                playlist_id = cur.fetchone()[0]
-            else:
-                playlist_id = row[0]
+                row = cur.fetchone()
+                if row is None:
+                    # Create a new playlist if not found.
+                    cur.execute("""
+                        INSERT INTO "Playlist" (playlist_name, user_id)
+                        VALUES (%s, %s)
+                        RETURNING playlist_id
+                    """, (pl_name, user_id))
+                    playlist_id = cur.fetchone()[0]
+                else:
+                    playlist_id = row[0]
 
-            # Insert a record in Playlist_Item linking the playlist and the new video.
-            cur.execute("""
-                INSERT INTO "Playlist_Item" (playlist_id, video_id)
-                VALUES (%s, %s)
-            """, (playlist_id, new_video_id))
+                # Insert a record in Playlist_Item linking the playlist and the new video.
+                # Add ON CONFLICT DO NOTHING to avoid errors if the link already exists
+                cur.execute("""
+                    INSERT INTO "Playlist_Item" (playlist_id, video_id)
+                    VALUES (%s, %s)
+                    ON CONFLICT (playlist_id, video_id) DO NOTHING
+                """, (playlist_id, new_video_id))
 
-        conn.commit()
-        return {"status": "success", "video_id": new_video_id}, 200
+            # Commit is handled automatically by context manager on successful exit
+
+        # Return success outside the 'with' block
+        return {"status": "success", "video_id": new_video_id}, 201 # 201 Created is often suitable here
 
     except Exception as e:
-        conn.rollback()
-        return {"status": "failed", "reason": str(e)}, 400
-
+        logger.error(f"Failed to upload video {youtube_video_id} for user {user_id}: {e}", exc_info=True)
+        # Rollback is handled automatically by context manager on exception
+        return {"status": "failed", "reason": "failed to upload video"}, 500
 
 def update_video_details(data, user_id):
     """
-    Updates an existing video record by using a playlist_item_id to determine the video.
-
-    Expects a JSON payload like:
-    {
-        "playlist_item_id": int,      // The playlist item ID to locate the video
-        "video_id": "2tM1LFFxeKg",      // External YouTube video id
-        "video_name": "What makes muscles grow?",
-        "subject": "Health",
-        "description": "Some description...",
-        "length": "00:12:34",           // As a string, cast to INTERVAL
-        "uploadby": "Prof. Jane AI"
-    }
-
-    Process:
-      1. Retrieve the video_id and the owner (user_id) of the playlist that holds this playlist item.
-      2. Check that the playlist is owned by the authenticated user.
-      3. Update the Video record (identified by video_id) with the new details.
-
-    Returns a tuple: (response_dict, http_status_code)
+    Updates an existing video record using the DB context manager.
     """
+    # Extract data from payload.
+    playlist_item_id = data.get("playlist_item_id")
+    youtube_id = data.get("video_id")
+    video_name = data.get("video_name")
+    subject = data.get("subject")
+    description = data.get("description")
+    length_str = data.get("length")
+    uploadby = data.get("uploadby")
+
+    # --- Input Validation ---
+    if not playlist_item_id:
+        return {"status": "failed", "reason": "missing playlist_item_id"}, 400
+    # Add checks for other fields if they are mandatory for update
+    if not all([youtube_id, video_name, subject, length_str]):
+         return {"status": "failed", "reason": "Missing required fields for video update."}, 400
+
+    video_pk = None # Initialize
     try:
-        conn = DB.get_connection()
-        cur = conn.cursor()
+         # --- Use the context manager ---
+        with DB.get_cursor() as cur:
+            # Retrieve the video_id from Playlist_Item and verify ownership via the Playlist table.
+            cur.execute("""
+                SELECT pi.video_id, p.user_id
+                FROM "Playlist_Item" pi
+                JOIN "Playlist" p ON pi.playlist_id = p.playlist_id
+                WHERE pi.playlist_item_id = %s
+            """, (playlist_item_id,))
+            result = cur.fetchone()
 
-        # Extract data from payload.
-        playlist_item_id = data.get("playlist_item_id")
-        youtube_id = data.get("video_id")
-        video_name = data.get("video_name")
-        subject = data.get("subject")
-        description = data.get("description")
-        length_str = data.get("length")
-        uploadby = data.get("uploadby")
+            if result is None:
+                # No DB change, context manager handles connection return
+                return {"status": "failed", "reason": "playlist item not found"}, 404
 
-        if not playlist_item_id:
-            return {"status": "failed", "reason": "missing playlist_item_id"}, 400
+            video_pk, owner_user_id = result
 
-        # Retrieve the video_id from Playlist_Item and verify ownership via the Playlist table.
-        cur.execute("""
-            SELECT pi.video_id, p.user_id
-            FROM "Playlist_Item" pi
-            JOIN "Playlist" p ON pi.playlist_id = p.playlist_id
-            WHERE pi.playlist_item_id = %s
-        """, (playlist_item_id,))
-        result = cur.fetchone()
-        if result is None:
-            return {"status": "failed", "reason": "playlist item not found"}, 404
+            # Check that the playlist belongs to the authenticated user.
+            if owner_user_id != user_id:
+                # No DB change, context manager handles connection return
+                return {"status": "failed", "reason": "not authorized to update video via this playlist item"}, 403
 
-        video_pk, owner_user_id = result
+            # Update the Video record corresponding to video_pk.
+            cur.execute("""
+                UPDATE "Video"
+                SET name = %s,
+                    description = %s,
+                    subject_name = %s,
+                    youtube_id = %s, -- Allow updating youtube_id? Be careful if it's used elsewhere.
+                    upload_by = %s,
+                    "length" = %s::interval
+                WHERE video_id = %s
+            """, (video_name, description, subject, youtube_id, uploadby, length_str, video_pk))
 
-        # Check that the playlist belongs to the authenticated user.
-        if owner_user_id != user_id:
-            return {"status": "failed", "reason": "not authorized to update video for this playlist item"}, 403
+            # Check that the update affected a row.
+            if cur.rowcount == 0:
+                # This means the video_id derived from playlist_item_id didn't exist in Video table
+                # Should be rare if DB constraints are set up, but good to check.
+                # Rollback is handled automatically by context manager on exception/exit if error occurs.
+                # If no error but rowcount is 0, it implies the video linked does not exist.
+                logger.warning(f"Update video details: Video with pk {video_pk} not found for update, though playlist item exists.")
+                return {"status": "failed", "reason": "video associated with playlist item not found"}, 404
 
-        # Update the Video record corresponding to video_pk.
-        cur.execute("""
-            UPDATE "Video"
-            SET name = %s,
-                description = %s,
-                subject_name = %s,
-                youtube_id = %s,
-                upload_by = %s,
-                "length" = %s::interval
-            WHERE video_id = %s
-        """, (video_name, description, subject, youtube_id, uploadby, length_str, video_pk))
+            # Commit is handled automatically by context manager on successful exit
 
-        # Check that the update affected a row.
-        if cur.rowcount == 0:
-            conn.rollback()
-            return {"status": "failed", "reason": "video not found"}, 404
-
-        conn.commit()
+        # Return success outside 'with' block
         return {"status": "success", "reason": "", "video_id": video_pk}, 200
 
     except Exception as e:
-        conn.rollback()
-        return {"status": "failed", "reason": str(e)}, 400
-
+        logger.error(f"Failed to update video details for playlist_item {playlist_item_id}, user {user_id}: {e}", exc_info=True)
+        # Rollback is handled automatically by context manager on exception
+        return {"status": "failed", "reason": "failed to update video details"}, 500
 
 def get_accessible_videos(user_id):
     """

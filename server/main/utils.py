@@ -30,7 +30,9 @@ def get_authenticated_user():
     user_id, status = get_user(session_id)
     if status != 200:
         resp = make_response(jsonify({"status": "failed", "reason": "Session expired or invalid"}), status)
-        resp.set_cookie("session_id", "", expires=0, httponly=True, secure=True, samesite='none')
+        if status != 500:
+            # resp.set_cookie("session_id", "", expires=0, httponly=True, secure=True, samesite='none')
+            print(f"!!!!!!!!!!!!!Session expired or invalid for user_id {user_id} {status}!!!!!!!!!!!!")
         return resp, 0, status
 
     return None, user_id, 200

@@ -46,16 +46,12 @@ def upload():
                                 f"Background generation trigger completed for {vid_id} ({lang}). Status: {result.get('status')}")
                         except Exception as e:
                             print(f"Error in background generation thread for {vid_id} ({lang}): {e}")
-                            traceback.print_exc()  # Log full traceback
+                            traceback.print_exc()
 
-                    # Start threads for desired languages
                     threading.Thread(target=trigger_generation, args=(video_id, "English",), daemon=True).start()
                     threading.Thread(target=trigger_generation, args=(video_id, "Hebrew",), daemon=True).start()
-                    # Setting daemon=True allows the main app to exit even if these threads are running
                 else:
                     print("Warning: Video upload successful but no video_id found in request data.")
-                    # Optionally modify response/status if video_id missing is an issue response_payload["warning"] =
-                    # "Video metadata stored, but generation not triggered due to missing video_id."
 
         except Exception as e:
             print(f"Error during video upload processing: {e}")
@@ -143,7 +139,7 @@ def get_video_questions(youtube_id):
                     "message": "Question generation is currently in progress. Please try again shortly."
                 }
                 status_code = 202 # Accepted
-            else: # failed or unknown
+            else:
                 response_payload = {
                     "status": "failed",
                     "reason": result_reason or "Failed to get or generate questions."

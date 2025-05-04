@@ -1,5 +1,9 @@
+import logging
+
 from db.DB import DB
 import psycopg2
+
+logger = logging.getLogger(__name__)
 
 
 def create_playlist(user_id, playlist_name, playlist_permission='unlisted'):
@@ -138,121 +142,105 @@ def update_playlist_permission(user_id, playlist_id, new_permission):
 
 def remove_from_playlist(user_id, data):
     """
-    Removes a playlist item.
-
-    Expects:
-      user_id (int): The ID of the user making the request.
-      data (dict): JSON payload containing:
-          {
-             "playlist_item_id": <int>
-          }
-
-    Process:
-      1. Verify that the playlist item exists and that the playlist it belongs to is owned by user_id.
-      2. Delete the playlist item.
-
-    Returns a tuple: (response_dict, http_status_code)
+    Removes a playlist item using the DB context manager.
     """
+    playlist_item_id = data.get("playlist_item_id")
+    if not playlist_item_id:
+        return {"status": "failed", "reason": "missing playlist_item_id"}, 400
+
     try:
-        conn = DB.get_connection()
-        cur = conn.cursor()
+        # Use the context manager
+        with DB.get_cursor() as cur:
+            # Verify the playlist item belongs to a playlist owned by the user.
+            cur.execute("""
+                SELECT p.user_id
+                FROM "Playlist_Item" pi
+                JOIN "Playlist" p ON pi.playlist_id = p.playlist_id
+                WHERE pi.playlist_item_id = %s
+            """, (playlist_item_id,))
+            result = cur.fetchone()
 
-        playlist_item_id = data.get("playlist_item_id")
-        if not playlist_item_id:
-            return ({"status": "failed", "reason": "missing playlist_item_id"}, 400)
+            if result is None:
+                # No DB change, context manager handles connection return
+                return {"status": "failed", "reason": "playlist item not found"}, 404 # Changed to 404 Not Found
 
-        # Verify the playlist item belongs to a playlist owned by the user.
-        cur.execute("""
-            SELECT p.user_id
-            FROM "Playlist_Item" pi
-            JOIN "Playlist" p ON pi.playlist_id = p.playlist_id
-            WHERE pi.playlist_item_id = %s
-        """, (playlist_item_id,))
-        result = cur.fetchone()
-        if result is None:
-            return ({"status": "failed", "reason": "playlist item not found"}, 400)
+            owner_user_id = result[0]
+            if owner_user_id != user_id:
+                 # No DB change, context manager handles connection return
+                return {"status": "failed", "reason": "not authorized to remove this playlist item"}, 403 # Changed to 403 Forbidden
 
-        owner_user_id = result[0]
-        if owner_user_id != user_id:
-            return ({"status": "failed", "reason": "not authorized to remove this playlist item"}, 400)
+            # Delete the playlist item.
+            cur.execute("""
+                DELETE FROM "Playlist_Item"
+                WHERE playlist_item_id = %s
+            """, (playlist_item_id,))
+            # Commit is handled automatically by the context manager on successful exit
 
-        # Delete the playlist item.
-        cur.execute("""
-            DELETE FROM "Playlist_Item"
-            WHERE playlist_item_id = %s
-        """, (playlist_item_id,))
-        conn.commit()
+        # Return success outside the 'with' block
+        return {"status": "success", "reason": "", "removed_playlist_item_id": playlist_item_id}, 200
 
-        return ({"status": "success", "reason": "", "removed_playlist_item_id": playlist_item_id}, 200)
     except Exception as e:
-        conn.rollback()
-        return ({"status": "failed", "reason": str(e)}, 400)
+        logger.error(f"Failed to remove playlist item {playlist_item_id} for user {user_id}: {e}", exc_info=True)
+        # Rollback is handled automatically by the context manager on exception
+        # Return a generic server error
+        return {"status": "failed", "reason": "failed to remove playlist item"}, 500
 
 
 def update_playlist_name(user_id, data):
     """
-    Updates the name of a user's playlist.
-
-    Expects a JSON payload like:
-    {
-      "old_name": "Old Playlist Name",
-      "new_name": "New Playlist Name"
-    }
-
-    The function searches for a playlist owned by the given user with the specified old name.
-    If found, it updates the playlist_name to the new name.
-
-    Returns:
-      tuple: (response_dict, http_status_code)
+    Updates the name of a user's playlist using the DB context manager.
     """
+    old_name = data.get("old_name")
+    new_name = data.get("new_name")
+
+    if not old_name or not new_name:
+        return {"status": "failed", "reason": "Missing old_name or new_name"}, 400
+
     try:
-        conn = DB.get_connection()
-        cur = conn.cursor()
+         # Use the context manager
+        with DB.get_cursor() as cur:
+            # Check if new name already exists for this user (optional but good practice)
+            cur.execute("""
+                SELECT 1 FROM "Playlist" WHERE playlist_name = %s AND user_id = %s LIMIT 1
+            """, (new_name, user_id))
+            if cur.fetchone():
+                 return {"status": "failed", "reason": f"Playlist with name '{new_name}' already exists"}, 400
 
-        old_name = data.get("old_name")
-        new_name = data.get("new_name")
+            # Find the playlist by old name
+            cur.execute("""
+                SELECT playlist_id FROM "Playlist"
+                WHERE playlist_name = %s AND user_id = %s
+                LIMIT 1
+            """, (old_name, user_id))
+            result = cur.fetchone()
 
-        if not old_name or not new_name:
-            return ({"status": "failed", "reason": "Missing old_name or new_name"}, 400)
+            if result is None:
+                 # No DB change, context manager handles connection return
+                return {"status": "failed", "reason": f"Playlist with name '{old_name}' not found"}, 404
 
-        # Search for the playlist with the given old name for this user.
-        cur.execute("""
-            SELECT playlist_id FROM "Playlist"
-            WHERE playlist_name = %s AND user_id = %s
-            LIMIT 1
-        """, (old_name, user_id))
-        result = cur.fetchone()
-        if result is None:
-            return ({"status": "failed", "reason": "Playlist with the given old_name not found"}, 404)
+            playlist_id = result[0]
 
-        playlist_id = result[0]
+            # Update the playlist name.
+            cur.execute("""
+                UPDATE "Playlist"
+                SET playlist_name = %s
+                WHERE playlist_id = %s
+            """, (new_name, playlist_id))
+            # Commit is handled automatically by context manager on successful exit
 
-        # Update the playlist name.
-        cur.execute("""
-            UPDATE "Playlist"
-            SET playlist_name = %s
-            WHERE playlist_id = %s
-        """, (new_name, playlist_id))
-
-        conn.commit()
-        return ({"status": "success", "reason": "Playlist name updated", "playlist_id": playlist_id}, 200)
+        # Return success outside 'with' block
+        return {"status": "success", "reason": "Playlist name updated", "playlist_id": playlist_id}, 200
 
     except Exception as e:
-        conn.rollback()
-        return ({"status": "failed", "reason": str(e)}, 500)
+        logger.error(f"Failed to update playlist name from '{old_name}' for user {user_id}: {e}", exc_info=True)
+         # Rollback is handled automatically by context manager on exception
+        return {"status": "failed", "reason": "failed to update playlist name"}, 500
 
 
 def get_playlist_subscribers(owner_id, playlist_id):
     """
     Retrieves subscriber details (email, full name) for a playlist,
-    verifying ownership first.
-
-    Args:
-        owner_id (int): The ID of the user claiming ownership.
-        playlist_id (int): The ID of the target playlist.
-
-    Returns:
-        tuple: (response_dict, http_status_code) as described previously.
+    verifying ownership first. (Already compatible, minor logging added).
     """
     try:
         with DB.get_cursor() as cur:
@@ -260,7 +248,6 @@ def get_playlist_subscribers(owner_id, playlist_id):
             cur.execute('SELECT user_id FROM "Playlist" WHERE playlist_id = %s', (playlist_id,))
             row = cur.fetchone()
             if row is None:
-                # No commit/rollback needed here as it's a read and context manager handles errors
                 return {"status": "failed", "reason": "Playlist not found"}, 404
 
             if row[0] != owner_id:
@@ -277,7 +264,7 @@ def get_playlist_subscribers(owner_id, playlist_id):
                 (playlist_id,)
             )
             rows = cur.fetchall()
-
+            # No commit/rollback needed for SELECT
             subscribers = [
                 {
                     "email": r[0],
@@ -285,19 +272,11 @@ def get_playlist_subscribers(owner_id, playlist_id):
                 }
                 for r in rows
             ]
-            # Commit happens automatically on successful exit of 'with' block
-
         return {"status": "success", "subscribers": subscribers}, 200
 
-    except psycopg2.Error as db_err: # Catch specific DB errors
-        print(f"Database error in get_playlist_subscribers: {db_err}")
-        # Rollback happens automatically due to exception in 'with' block
-        return {"status": "failed", "reason": f"Database error: {db_err}"}, 500
     except Exception as e: # Catch any other errors
-        print(f"Error in get_playlist_subscribers: {e}")
-        # Rollback happens automatically due to exception in 'with' block
-        return {"status": "failed", "reason": f"An unexpected error occurred: {e}"}, 500
-    # No finally block needed for cursor/connection handling
+        logger.error(f"Error getting subscribers for playlist {playlist_id}, owner {owner_id}: {e}", exc_info=True)
+        return {"status": "failed", "reason": "failed to get subscribers"}, 500
 
 
 def get_playlist_subscriber_count(owner_id, playlist_id):
