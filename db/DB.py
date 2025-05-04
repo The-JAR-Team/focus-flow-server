@@ -5,7 +5,10 @@ import psycopg2.pool  # Import the pool module
 import os
 import threading  # For thread lock during initialization
 import logging  # Use logging for messages
+import psycopg2.errors  # To specifically catch unique constraint errors
 
+
+UNIQUE_VIOLATION_CODE = '23505'
 # Configure basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -95,6 +98,9 @@ class DB:
             logger.error(f"Failed to get connection from pool: {pe}")
             # Handle pool errors specifically (e.g., pool exhausted)
             raise RuntimeError(f"Database pool error: {pe}") from pe
+        except psycopg2.errors.lookup(UNIQUE_VIOLATION_CODE) as e:
+            logger.error(f"Unique constraint violation: {e}")
+            acquired = False
         except Exception as e:
             logger.error(f"DB operation failed: {e}", exc_info=True)  # Log exception info
             if conn:
