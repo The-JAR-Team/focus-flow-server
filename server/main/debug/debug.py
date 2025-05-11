@@ -81,17 +81,10 @@ def execute_sql():
             return jsonify({"error": "Invalid type parameter. Allowed values are 'html', 'string_table', 'data'."}), 400
 
         # Execute the query using your PostgreSQL DB class
-        connection = DB.get_connection()
-        cursor = connection.cursor()
-        cursor.execute(sql_query)
-
-        # Fetch results
-        rows = cursor.fetchall()
-        headers = [desc[0] for desc in cursor.description]  # Extract column names
-
-        # Close the cursor/connection if not used anymore
-        cursor.close()
-        connection.close()
+        with DB.get_cursor() as cursor:
+            cursor.execute(sql_query)
+            rows = cursor.fetchall()
+            headers = [desc[0] for desc in cursor.description]  # Extract column names
 
         # Format and return the results based on 'type' parameter
         if type_param == 'html':
