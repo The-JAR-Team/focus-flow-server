@@ -1,16 +1,11 @@
-import json
 import math
 import os
 import time
-import traceback
-from typing import Dict, Any
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.proxies import GenericProxyConfig
-from db.db_api import get_transcript, \
-    insert_transcript, get_summary, update_summary
+from db.db_api import get_transcript, insert_transcript
 from db.lock_management import DistributedLock
-from logic.generation.gemini_api.gemini_api_request import summery_request
 
 
 def sanitize_text(text: str) -> str:

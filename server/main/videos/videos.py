@@ -4,7 +4,8 @@ import traceback
 from flask import Blueprint, request, jsonify
 from db.db_api import (upload_video, update_video_details, remove_from_playlist,
                        get_all_videos_user_can_access)
-from logic.generation.transcript_maker import get_or_generate_questions, get_or_generate_summary
+from logic.generation.question_maker import get_or_generate_questions
+from logic.generation.summary_maker import get_or_generate_summary
 from server.main.utils import get_authenticated_user, check_authenticated_video
 
 videos_bp = Blueprint('videos', __name__)

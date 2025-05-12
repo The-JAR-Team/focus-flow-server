@@ -9,7 +9,7 @@ you'll find its expected input (arguments) and output (return values).
 """
 
 from db import user_management, playlists_management, video_management, subscription_management, watch_management, \
-    question_management, lock_management, transcript_manager
+    question_management, lock_management, transcript_manager, summary_management
 from db.video_management import get_accessible_videos
 
 
@@ -598,22 +598,24 @@ def get_summary(youtube_id: str, language: str):
                       otherwise None. Returns None and logs an error if a
                       database or unexpected error occurs.
     """
-    return transcript_manager.get_summary(youtube_id, language)
+    return summary_management.get_summary(youtube_id, language)
 
 
-def update_summary(youtube_id: str, language: str, summary_json: dict):
+def upsert_summary(youtube_id: str, language: str, summary_json: dict):
     """
-    Updates the summary JSON object for a specific transcript entry.
+    Inserts a new summary entry or updates the existing one for the given
+    youtube_id and language combination in the "Summary" table.
 
     Args:
         youtube_id (str): The YouTube video ID.
-        language (str): The language associated with the transcript/summary.
-        summary_json (dict): The Python dictionary to be stored as JSONB in the 'summery' column.
+        language (str): The language associated with the summary.
+        summary_json (dict): The Python dictionary to be stored as JSONB in the 'summary' column.
 
     Returns:
         dict: A dictionary containing:
             - "status" (str): "success" or "failed".
             - "message" (str): A descriptive message about the operation.
-            - "rows_affected" (int): The number of rows updated (should be 0 or 1).
+            - "operation" (str): "insert" or "update" indicating what the DB did (best guess based on rowcount).
+                                 Note: ON CONFLICT doesn't directly return this, so it's inferred.
     """
-    return transcript_manager.update_summary(youtube_id, language, summary_json)
+    return summary_management.upsert_summary(youtube_id, language, summary_json)

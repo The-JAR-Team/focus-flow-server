@@ -3,7 +3,7 @@ import os
 import threading
 import time
 import traceback
-from typing import Dict
+from typing import Dict, Any
 
 from db.db_api import store_questions_in_db, release_lock, questions_ready, acquire_lock, get_questions_for_video
 from logic.generation.gemini_api.gemini_api_request import question_requests
