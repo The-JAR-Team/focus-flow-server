@@ -26,7 +26,7 @@ def _generate_and_store_summary(youtube_id: str, lang: str):
 
     try:
         transcript = fetch_transcript_as_string(youtube_id)
-        if not transcript:
+        if not transcript or transcript == "":
             raise ValueError(f"Transcript for {youtube_id} is empty or could not be fetched.")
 
         summary_str = summery_request(transcript, lang)
