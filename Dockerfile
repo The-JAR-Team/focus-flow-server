@@ -66,5 +66,5 @@ COPY . .
 # EXPOSE 8080
 
 # Set the command to run your application using Gunicorn.
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-8080} --workers 5 --timeout 3600 server.main.app:app"]
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-8080} --workers 10 --timeout 3600 server.main.app:app"]
 

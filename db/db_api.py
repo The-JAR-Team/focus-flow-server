@@ -8,7 +8,8 @@ subscription_management, watch_management, or question_management. Below each fu
 you'll find its expected input (arguments) and output (return values).
 """
 
-from db import user_management, playlists_management, video_management, subscription_management, watch_management, question_management
+from db import user_management, playlists_management, video_management, subscription_management, watch_management, \
+    question_management, lock_management, transcript_manager, summary_management
 from db.video_management import get_accessible_videos
 
 
@@ -349,7 +350,7 @@ def get_all_videos_user_can_access(user_id):
     return get_accessible_videos(user_id)
 
 
-def get_questions_for_video_api(youtube_id, language):
+def get_questions_for_video(youtube_id, language):
     """
     Retrieves questions for a given YouTube video and language by delegating to question_management.get_questions_for_video.
 
@@ -523,3 +524,98 @@ def get_model_results_by_video(youtube_id: str):
               {"status": "failed", "reason": "Error retrieving model results"}, 500
     """
     return watch_management.get_model_results_by_video(youtube_id)
+
+
+def acquire_lock(lock_key: str) -> bool:
+    """
+    Attempts to acquire a distributed lock by inserting a unique key into the Generation_Locks table.
+
+    Args:
+        lock_key (str): The unique identifier for the resource to lock (e.g., "youtubeId_language").
+
+    Returns:
+        bool: True if the lock was successfully acquired, False otherwise (lock already held or DB error).
+    """
+    return lock_management.acquire_lock(lock_key)
+
+
+def release_lock(lock_key: str) -> bool:
+    """
+    Releases a distributed lock by deleting the corresponding key from the Generation_Locks table.
+
+    Args:
+        lock_key (str): The unique identifier for the resource lock to release.
+
+    Returns:
+        bool: True if the lock was successfully deleted (or didn't exist), False if a DB error occurred.
+    """
+    return lock_management.release_lock(lock_key)
+
+
+def insert_transcript(youtube_id: str, language: str, transcript_text: str):
+    """
+    Inserts a new transcript into the "Transcript" table.
+
+    Args:
+        youtube_id (str): The YouTube video ID.
+        language (str): The language of the transcript (e.g., 'en', 'es').
+        transcript_text (str): The actual transcript content.
+
+    Returns:
+        dict: A dictionary containing:
+            - "status" (str): "success" or "failed".
+            - "message" (str): A descriptive message about the operation.
+            - "transcript_id" (tuple or None): A tuple (youtube_id, language) if successful, else None.
+    """
+    return transcript_manager.insert_transcript(youtube_id, language, transcript_text)
+
+
+def get_transcript(youtube_id: str, language: str):
+    """
+    Retrieves a transcript from the "Transcript" table.
+
+    Args:
+        youtube_id (str): The YouTube video ID.
+        language (str): The language of the transcript.
+
+    Returns:
+        str or None: The transcript text if found, otherwise None.
+                     Returns None and logs an error if a database or unexpected error occurs.
+    """
+    return transcript_manager.get_transcript(youtube_id, language)
+
+
+def get_summary(youtube_id: str, language: str):
+    """
+    Retrieves the summary JSON object from the "Transcript" table.
+
+    Args:
+        youtube_id (str): The YouTube video ID.
+        language (str): The language associated with the transcript/summary.
+
+    Returns:
+        dict or None: The summary JSON object (as a Python dict) if found,
+                      otherwise None. Returns None and logs an error if a
+                      database or unexpected error occurs.
+    """
+    return summary_management.get_summary(youtube_id, language)
+
+
+def upsert_summary(youtube_id: str, language: str, summary_json: dict):
+    """
+    Inserts a new summary entry or updates the existing one for the given
+    youtube_id and language combination in the "Summary" table.
+
+    Args:
+        youtube_id (str): The YouTube video ID.
+        language (str): The language associated with the summary.
+        summary_json (dict): The Python dictionary to be stored as JSONB in the 'summary' column.
+
+    Returns:
+        dict: A dictionary containing:
+            - "status" (str): "success" or "failed".
+            - "message" (str): A descriptive message about the operation.
+            - "operation" (str): "insert" or "update" indicating what the DB did (best guess based on rowcount).
+                                 Note: ON CONFLICT doesn't directly return this, so it's inferred.
+    """
+    return summary_management.upsert_summary(youtube_id, language, summary_json)
