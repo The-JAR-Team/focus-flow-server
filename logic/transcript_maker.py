@@ -12,7 +12,7 @@ from db.db_api import store_questions_in_db, questions_ready, release_lock, acqu
     insert_transcript
 from db.lock_management import DistributedLock
 from db.question_management import get_questions_for_video
-from logic.gemini_api import generate
+from logic.gemini_api_request import question_requests
 
 
 def generation_task_wrapper(video_id_inner, lang_inner, lock_key_inner):
@@ -222,7 +222,7 @@ def _generate_and_store_questions(youtube_id: str, lang="Hebrew", chunk_duration
                 result_str = ""
                 try:
                     clean_chunk = sanitize_text(chunk_text)
-                    result_str = generate(text_file=clean_chunk, lang=lang)  # Call AI
+                    result_str = question_requests(text_file=clean_chunk, lang=lang)
                     result_dict = json.loads(result_str)
                     thread_questions = result_dict.get("questions", [])
                     if thread_questions is None or len(thread_questions) == 0:
