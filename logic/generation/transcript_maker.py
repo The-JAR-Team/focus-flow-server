@@ -2,7 +2,8 @@ import math
 import os
 import time
 from dotenv import load_dotenv
-from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, CouldNotRetrieveTranscript, \
+    TranscriptsDisabled
 from youtube_transcript_api.proxies import GenericProxyConfig
 from db.db_api import get_transcript, insert_transcript
 from db.lock_management import DistributedLock
@@ -32,17 +33,19 @@ def fetch_transcript_as_string(video_id: str) -> str:
     """
     Fetches the transcript from YouTube for the given `video_id` and returns
     a combined string with each line's timestamp and text.
-    By default, tries Hebrew or English transcripts if available.
-    Retries up to 15 times (with a 0.1 sec delay between attempts) before raising an exception.
+
+    Priority order for languages: Hebrew (he/iw), English (en), any available language
+    Only retries for network/proxy errors, not for missing transcript errors.
     """
-    max_attempts = 15
+    max_attempts = 10
     attempt = 0
     last_exception = None
     lock_key = f"{video_id}_Generic_Transcript"
     transcript_str = ""
 
     try:
-        with DistributedLock(lock_key, blocking=True, timeout=600, retry_interval=5):
+        with DistributedLock(lock_key, blocking=True, timeout=60, retry_interval=10):
+            # Try to get from database first
             transcript_str = get_transcript(video_id, "Generic")
             if transcript_str is None:
                 transcript_str = ""
@@ -55,21 +58,42 @@ def fetch_transcript_as_string(video_id: str) -> str:
                     )
                 )
 
+                # First, try to get available transcripts
                 while attempt < max_attempts:
                     try:
                         transcript_list = ytt_api.list(video_id=video_id)
-                        transcript_obj = transcript_list.find_transcript(['en', 'iw', 'he'])
-                        lines = transcript_obj.fetch()
-                        # If successful, break out of the loop.
+
+                        try:
+                            transcript_obj = transcript_list.find_transcript(['en', 'he', 'iw'])
+                            lines = transcript_obj.fetch()
+                            print(f"Found Hebrew transcript for {video_id}")
+                        except (NoTranscriptFound, CouldNotRetrieveTranscript):
+                            try:
+                                available_languages = [t.language for t in transcript_list]
+
+                                if available_languages:
+                                    first_lang = available_languages[0]
+                                    transcript_obj = transcript_list.find_transcript([first_lang])
+                                    lines = transcript_obj.fetch()
+                                    print(f"Found transcript in {first_lang} for {video_id}")
+                                else:
+                                    print(f"No transcripts available for {video_id}")
+                                    return ""
+                            except Exception as e:
+                                print(f"Error fetching any transcript for {video_id}: {e}")
+                                return ""
                         break
+
+                    except (TranscriptsDisabled, NoTranscriptFound) as e:
+                        print(f"No transcripts available for {video_id}: {e}")
+                        return ""
                     except Exception as e:
-                        print(f"Attempt {attempt + 1} failed: {e}")
+                        print(f"Attempt {attempt + 1} failed with network/proxy error: {e}")
                         last_exception = e
                         attempt += 1
-                        time.sleep(0.1 * (2**attempt))  # Wait 0.1 seconds before trying again.
-                else:
-                    # If we've exhausted all attempts, raise the last encountered exception.
-                    raise last_exception
+                        if attempt >= max_attempts:
+                            raise last_exception
+                        time.sleep(0.1 * (2 * attempt))
 
                 for line in lines:
                     start_time = seconds_to_hhmmss(line.start)
@@ -77,16 +101,20 @@ def fetch_transcript_as_string(video_id: str) -> str:
                     text = line.text
                     transcript_str += f"Start: {start_time}, Duration: {duration}\n{text}\n\n"
 
-                # Store the transcript in the database after checking its not empty
-                if transcript_str != "":
+                if transcript_str:
                     store_result = insert_transcript(video_id, "Generic", transcript_str)
                     if store_result != 0:
                         print(f"Transcript stored successfully for {video_id}.")
                     else:
                         print(f"Failed to store transcript for {video_id}.")
+
     except DistributedLock.LockAcquisitionFailed:
         print(f"Failed to acquire lock for {lock_key}.")
-        pass
+    except Exception as e:
+        print(f"Error fetching transcript for {video_id}: {e}")
+        if last_exception:
+            print(f"Last exception encountered: {last_exception}")
+        raise
 
     return transcript_str
 
