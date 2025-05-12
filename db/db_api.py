@@ -350,7 +350,7 @@ def get_all_videos_user_can_access(user_id):
     return get_accessible_videos(user_id)
 
 
-def get_questions_for_video_api(youtube_id, language):
+def get_questions_for_video(youtube_id, language):
     """
     Retrieves questions for a given YouTube video and language by delegating to question_management.get_questions_for_video.
 
@@ -583,3 +583,37 @@ def get_transcript(youtube_id: str, language: str):
                      Returns None and logs an error if a database or unexpected error occurs.
     """
     return transcript_manager.get_transcript(youtube_id, language)
+
+
+def get_summary(youtube_id: str, language: str):
+    """
+    Retrieves the summary JSON object from the "Transcript" table.
+
+    Args:
+        youtube_id (str): The YouTube video ID.
+        language (str): The language associated with the transcript/summary.
+
+    Returns:
+        dict or None: The summary JSON object (as a Python dict) if found,
+                      otherwise None. Returns None and logs an error if a
+                      database or unexpected error occurs.
+    """
+    return transcript_manager.get_summary(youtube_id, language)
+
+
+def update_summary(youtube_id: str, language: str, summary_json: dict):
+    """
+    Updates the summary JSON object for a specific transcript entry.
+
+    Args:
+        youtube_id (str): The YouTube video ID.
+        language (str): The language associated with the transcript/summary.
+        summary_json (dict): The Python dictionary to be stored as JSONB in the 'summery' column.
+
+    Returns:
+        dict: A dictionary containing:
+            - "status" (str): "success" or "failed".
+            - "message" (str): A descriptive message about the operation.
+            - "rows_affected" (int): The number of rows updated (should be 0 or 1).
+    """
+    return transcript_manager.update_summary(youtube_id, language, summary_json)

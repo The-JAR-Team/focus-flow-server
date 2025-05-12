@@ -3,8 +3,8 @@ import traceback
 
 from flask import Blueprint, request, jsonify
 from db.db_api import (upload_video, update_video_details, remove_from_playlist,
-                       get_all_videos_user_can_access, get_questions_for_video_api)
-from logic.transcript_maker import get_or_generate_questions
+                       get_all_videos_user_can_access)
+from logic.generation.transcript_maker import get_or_generate_questions, get_or_generate_summary
 from server.main.utils import get_authenticated_user, check_authenticated_video
 
 videos_bp = Blueprint('videos', __name__)
@@ -152,4 +152,70 @@ def get_video_questions(youtube_id):
             response_payload = {"status": "failed", "reason": f"An unexpected server error occurred: {str(e)}"}
             status_code = 500
 
+    return jsonify(response_payload), status_code
+
+
+@videos_bp.route('/videos/<string:youtube_id>/summary', methods=['GET'])
+def get_video_summary(youtube_id):
+    """
+    Retrieves the summary for the video, generating it if necessary via locking mechanism.
+    """
+    response_payload = {"status": "failed", "reason": "Internal Server Error"}
+    status_code = 500
+
+    # 1. Authenticate User
+    auth_resp, user_id, auth_status = get_authenticated_user()
+    if auth_resp is not None:
+        return auth_resp, auth_status
+
+    # 2. Check Video Access
+    vid_access_message, vid_access_status = check_authenticated_video(youtube_id, user_id)
+    if vid_access_status != 200:
+        response_payload = vid_access_message
+        status_code = vid_access_status
+    else:
+        # 3. Get Language (default to Hebrew if not provided)
+        lang = request.args.get("lang", "Hebrew")
+
+        try:
+            # 4. Call the get_or_generate_summary function
+            # Ensure get_or_generate_summary is imported correctly
+            result_data = get_or_generate_summary(youtube_id=youtube_id, lang=lang)
+            result_status = result_data.get("status")
+            result_summary = result_data.get("summary")  # Expecting a dict like {"response": "..."} or None
+            result_reason = result_data.get("reason", "")
+
+            # 5. Handle Response Statuses
+            if result_status == "success":
+                response_payload = {
+                    "status": "success",
+                    "video_summary": {
+                        "youtube_id": youtube_id,
+                        "language": lang,
+                        # Assuming result_summary is the dict {"response": "..."}
+                        "summary": result_summary
+                    }
+                }
+                status_code = 200
+            elif result_status == "blocked":
+                response_payload = {
+                    "status": "pending",
+                    "reason": result_reason,
+                    "message": "Summary generation is currently in progress or blocked. Please try again shortly."
+                }
+                status_code = 202 # Accepted
+            else: # Failed status from get_or_generate_summary
+                response_payload = {
+                    "status": "failed",
+                    "reason": result_reason or "Failed to get or generate summary."
+                }
+                status_code = 500 # Or appropriate error code based on failure reason
+
+        except Exception as e:
+            print(f"Unexpected error in get_video_summary endpoint for {youtube_id} ({lang}): {e}")
+            traceback.print_exc()
+            response_payload = {"status": "failed", "reason": f"An unexpected server error occurred: {str(e)}"}
+            status_code = 500
+
+    # 6. Return JSON Response
     return jsonify(response_payload), status_code
