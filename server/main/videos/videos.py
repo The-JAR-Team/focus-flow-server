@@ -39,18 +39,30 @@ def upload():
                 if video_id:
                     print(f"Upload successful for {video_id}. Triggering background generation...")
 
-                    def trigger_generation(vid_id, lang):
+                    def trigger_question_generation(vid_id, lang):
                         """Target function for background thread."""
                         try:
                             result = get_or_generate_questions(youtube_id=vid_id, lang=lang)
                             print(
-                                f"Background generation trigger completed for {vid_id} ({lang}). Status: {result.get('status')}")
+                                f"Background question generation trigger completed for {vid_id} ({lang}). Status: {result.get('status')}")
                         except Exception as e:
-                            print(f"Error in background generation thread for {vid_id} ({lang}): {e}")
+                            print(f"Error in background question generation thread for {vid_id} ({lang}): {e}")
                             traceback.print_exc()
 
-                    threading.Thread(target=trigger_generation, args=(video_id, "English",), daemon=True).start()
-                    threading.Thread(target=trigger_generation, args=(video_id, "Hebrew",), daemon=True).start()
+                    def trigger_summary_generation(vid_id, lang):
+                        """Target function for background thread."""
+                        try:
+                            result = get_or_generate_summary(youtube_id=vid_id, lang=lang)
+                            print(
+                                f"Background summary generation trigger completed for {vid_id} ({lang}). Status: {result.get('status')}")
+                        except Exception as e:
+                            print(f"Error in background summary generation thread for {vid_id} ({lang}): {e}")
+                            traceback.print_exc()
+
+                    threading.Thread(target=trigger_question_generation, args=(video_id, "English",), daemon=True).start()
+                    threading.Thread(target=trigger_summary_generation, args=(video_id, "English",), daemon=True).start()
+                    threading.Thread(target=trigger_question_generation, args=(video_id, "Hebrew",), daemon=True).start()
+                    threading.Thread(target=trigger_summary_generation, args=(video_id, "Hebrew",), daemon=True).start()
                 else:
                     print("Warning: Video upload successful but no video_id found in request data.")
 
