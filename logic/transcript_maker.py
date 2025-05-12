@@ -8,7 +8,9 @@ from typing import Dict, Any
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.proxies import GenericProxyConfig
-from db.db_api import store_questions_in_db, questions_ready, release_lock, acquire_lock
+from db.db_api import store_questions_in_db, questions_ready, release_lock, acquire_lock, get_transcript, \
+    insert_transcript
+from db.lock_management import DistributedLock
 from db.question_management import get_questions_for_video
 from logic.gemini_api import generate
 
@@ -67,37 +69,56 @@ def fetch_transcript_as_string(video_id: str) -> str:
     max_attempts = 15
     attempt = 0
     last_exception = None
-
-    while attempt < max_attempts:
-        try:
-            load_dotenv()
-            ytt_api = YouTubeTranscriptApi(
-                proxy_config=GenericProxyConfig(
-                    http_url=os.getenv("PROXY_HTTP"),
-                    https_url=os.getenv("PROXY_HTTPS"),
-                )
-            )
-
-            transcript_list = ytt_api.list(video_id=video_id)
-            transcript_obj = transcript_list.find_transcript(['en', 'iw', 'he'])
-            lines = transcript_obj.fetch()
-            # If successful, break out of the loop.
-            break
-        except Exception as e:
-            print(f"Attempt {attempt + 1} failed: {e}")
-            last_exception = e
-            attempt += 1
-            time.sleep(0.1)  # Wait 0.1 seconds before trying again.
-    else:
-        # If we've exhausted all attempts, raise the last encountered exception.
-        raise last_exception
-
+    lock_key = f"{video_id}_Generic"
     transcript_str = ""
-    for line in lines:
-        start_time = seconds_to_hhmmss(line.start)
-        duration = seconds_to_hhmmss(line.duration)
-        text = line.text
-        transcript_str += f"Start: {start_time}, Duration: {duration}\n{text}\n\n"
+
+    try:
+        with DistributedLock(lock_key, blocking=True, timeout=600, retry_interval=5):
+            transcript_str = get_transcript(video_id, "Generic")
+            if transcript_str is None:
+                transcript_str = ""
+
+                load_dotenv()
+                ytt_api = YouTubeTranscriptApi(
+                    proxy_config=GenericProxyConfig(
+                        http_url=os.getenv("PROXY_HTTP"),
+                        https_url=os.getenv("PROXY_HTTPS"),
+                    )
+                )
+
+                while attempt < max_attempts:
+                    try:
+                        transcript_list = ytt_api.list(video_id=video_id)
+                        transcript_obj = transcript_list.find_transcript(['en', 'iw', 'he'])
+                        lines = transcript_obj.fetch()
+                        # If successful, break out of the loop.
+                        break
+                    except Exception as e:
+                        print(f"Attempt {attempt + 1} failed: {e}")
+                        last_exception = e
+                        attempt += 1
+                        time.sleep(0.1 * (2**attempt))  # Wait 0.1 seconds before trying again.
+                else:
+                    # If we've exhausted all attempts, raise the last encountered exception.
+                    raise last_exception
+
+                for line in lines:
+                    start_time = seconds_to_hhmmss(line.start)
+                    duration = seconds_to_hhmmss(line.duration)
+                    text = line.text
+                    transcript_str += f"Start: {start_time}, Duration: {duration}\n{text}\n\n"
+
+                # Store the transcript in the database after checking its not empty
+                if transcript_str != "":
+                    store_result = insert_transcript(video_id, "Generic", transcript_str)
+                    if store_result != 0:
+                        print(f"Transcript stored successfully for {video_id}.")
+                    else:
+                        print(f"Failed to store transcript for {video_id}.")
+    except DistributedLock.LockAcquisitionFailed:
+        print(f"Failed to acquire lock for {lock_key}.")
+        pass
+
     return transcript_str
 
 
@@ -185,6 +206,8 @@ def _generate_and_store_questions(youtube_id: str, lang="Hebrew", chunk_duration
 
     try:
         transcript_text = fetch_transcript_as_string(youtube_id)
+        if transcript_text == "":
+            raise ValueError(f"Transcript for {youtube_id} is empty.")
         chunks = split_transcript(transcript_text, chunk_duration)
         if not chunks: raise ValueError("Transcript yielded no processable chunks.")
 

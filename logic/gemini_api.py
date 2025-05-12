@@ -10,7 +10,7 @@ from google.genai import types
 # Model configuration
 DEFAULT_MODEL = "gemini-2.5-flash-preview-04-17"
 
-    
+
 def repair_json(json_str):
     """
     Attempts to repair truncated or malformed JSON, focusing on finding the
@@ -134,7 +134,7 @@ def generate(text_file: str, lang: str = "Hebrew") -> str:
         temperature=0.8,
         top_p=0.95,
         top_k=40,
-        max_output_tokens=8192,
+        max_output_tokens=32768,
         response_mime_type="application/json",
         response_schema=types.Schema(
             type=types.Type.OBJECT,

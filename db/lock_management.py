@@ -82,11 +82,6 @@ def release_lock(lock_key: str) -> bool:
     return released
 
 
-class LockAcquisitionFailed(Exception):
-    """Custom exception for when a distributed lock cannot be acquired."""
-    pass
-
-
 class DistributedLock:
     """
     A context manager for acquiring and releasing a distributed lock
@@ -111,6 +106,10 @@ class DistributedLock:
             # Handle lock not acquired after timeout
             pass
     """
+    class LockAcquisitionFailed(Exception):
+        """Custom exception for when a distributed lock cannot be acquired."""
+        pass
+
     def __init__(self, lock_key: str, blocking: bool = False, timeout: int = 600, retry_interval: float = 5.0):
         """
         Initializes the distributed lock context manager.
@@ -153,14 +152,14 @@ class DistributedLock:
 
             if not self.blocking:
                 logger.warning(f"Context manager: Failed to acquire lock for key '{self.lock_key}' (non-blocking).")
-                raise LockAcquisitionFailed(f"Failed to acquire lock for key '{self.lock_key}' (non-blocking).")
+                raise DistributedLock.LockAcquisitionFailed(f"Failed to acquire lock for key '{self.lock_key}' (non-blocking).")
 
             elapsed_time = time.monotonic() - start_time
             if elapsed_time >= self.timeout:
                 logger.error(
                     f"Context manager: Timeout ({self.timeout}s) exceeded while trying to acquire lock for key '{self.lock_key}'."
                 )
-                raise LockAcquisitionFailed(
+                raise DistributedLock.LockAcquisitionFailed(
                     f"Timeout ({self.timeout}s) exceeded while trying to acquire lock for key '{self.lock_key}'."
                 )
 

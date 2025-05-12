@@ -9,7 +9,7 @@ you'll find its expected input (arguments) and output (return values).
 """
 
 from db import user_management, playlists_management, video_management, subscription_management, watch_management, \
-    question_management, lock_management
+    question_management, lock_management, transcript_manager
 from db.video_management import get_accessible_videos
 
 
@@ -550,3 +550,36 @@ def release_lock(lock_key: str) -> bool:
         bool: True if the lock was successfully deleted (or didn't exist), False if a DB error occurred.
     """
     return lock_management.release_lock(lock_key)
+
+
+def insert_transcript(youtube_id: str, language: str, transcript_text: str):
+    """
+    Inserts a new transcript into the "Transcript" table.
+
+    Args:
+        youtube_id (str): The YouTube video ID.
+        language (str): The language of the transcript (e.g., 'en', 'es').
+        transcript_text (str): The actual transcript content.
+
+    Returns:
+        dict: A dictionary containing:
+            - "status" (str): "success" or "failed".
+            - "message" (str): A descriptive message about the operation.
+            - "transcript_id" (tuple or None): A tuple (youtube_id, language) if successful, else None.
+    """
+    return transcript_manager.insert_transcript(youtube_id, language, transcript_text)
+
+
+def get_transcript(youtube_id: str, language: str):
+    """
+    Retrieves a transcript from the "Transcript" table.
+
+    Args:
+        youtube_id (str): The YouTube video ID.
+        language (str): The language of the transcript.
+
+    Returns:
+        str or None: The transcript text if found, otherwise None.
+                     Returns None and logs an error if a database or unexpected error occurs.
+    """
+    return transcript_manager.get_transcript(youtube_id, language)
