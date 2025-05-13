@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from flask import Blueprint, request, jsonify
 from db.db_api import *
 from server.main.utils import get_authenticated_user
@@ -12,21 +14,44 @@ mode = os.environ.get('MODE')
 
 @auth_bp.route('/login', methods=['POST'])
 def login():
-    data = request.get_json()  # Expects JSON payload with "email" and "password"
+    """
+    Handles user login, creates a session, and sets a session cookie.
+    Optionally checks for a minimum permission level.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"status": "failed", "reason": "Invalid JSON payload"}), 400
+
+    min_permission_str = request.args.get("min_permission", 0)
+    try:
+        min_permission = int(min_permission_str)
+    except ValueError:
+        return jsonify({"status": "failed", "reason": "Invalid min_permission value in query parameter"}), 400
+
     response, status, session_id = proxy_logins_api(login_user, data, mode)
 
     if status == 200:
+        # Login successful, now check permission if required
+        user_id = get_user(session_id)[0]
+        if min_permission > 0:
+            user_permission = get_permission(user_id)
+            if user_permission < min_permission:
+                print(f"Login denied for user_id {user_id}: insufficient permission (required: {min_permission}, has: {user_permission})")
+                return jsonify({"status": "failed", "reason": "Insufficient permissions"}), 403 # Forbidden
+
+        # Permission check passed (or not required)
         resp = jsonify(response)
         # Set the session_id cookie
         resp.set_cookie(
             'session_id',
             session_id,
             httponly=True,
-            secure=True,  # set to True if using HTTPS
-            samesite='none'  # adjust as needed
+            samesite='none',
         )
         return resp, status
-    return jsonify(response), status
+    else:
+        # Login failed (wrong password, user not found, etc.)
+        return jsonify(response), status
 
 
 @auth_bp.route('/register', methods=['POST'])
@@ -42,7 +67,7 @@ def register():
             session_id,
             httponly=True,
             secure=True,
-            samesite='none'
+            samesite='none',
         )
         return resp, status
 
