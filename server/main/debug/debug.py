@@ -3,6 +3,7 @@ from sqlparse.tokens import DML
 from tabulate import tabulate
 from flask import Blueprint, request, jsonify
 from db.DB import DB
+from server.main.utils import get_authenticated_user
 
 debug_bp = Blueprint('debug_bp', __name__)
 
@@ -60,6 +61,11 @@ def execute_sql():
 
     Only single SELECT statements are allowed, for safety reasons.
     """
+
+    auth_resp, user_id, auth_status = get_authenticated_user()
+    if auth_resp is not None:
+        return auth_resp, auth_status  # Return authentication error directly
+
     try:
         # Parse JSON payload from the request
         data = request.get_json()

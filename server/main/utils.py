@@ -1,12 +1,12 @@
 from flask import Flask, request, jsonify
 
-from db.db_api import get_user, get_all_videos_user_can_access
+from db.db_api import get_user, get_all_videos_user_can_access, get_permission
 
 from flask import request, jsonify, make_response, Response
 from db.db_api import get_user  # Assuming get_user(session_id) returns (user_id, status)
 
 
-def get_authenticated_user():
+def get_authenticated_user(min_permission=0):
     """
     Reads the session_id cookie, validates the session,
     and returns a tuple: (resp, user_id, status)
@@ -34,6 +34,11 @@ def get_authenticated_user():
             # resp.set_cookie("session_id", "", expires=0, httponly=True, secure=True, samesite='none')
             print(f"!!!!!!!!!!!!!Session expired or invalid for user_id {user_id} {status}!!!!!!!!!!!!")
         return resp, 0, status
+
+    # Check if the user has the required permission level
+    if get_permission(user_id) < min_permission:
+        resp = make_response(jsonify({"status": "failed", "reason": "Insufficient permissions"}), 403)
+        return resp, user_id, 403
 
     return None, user_id, 200
 

@@ -88,6 +88,20 @@ def get_user(session_id):
     return user_management.get_user(session_id)
 
 
+def get_permission(user_id: int):
+    """
+    Retrieves the permission level for a given user_id.
+
+    Args:
+        user_id (int): The ID of the user.
+
+    Returns:
+        int or None: The permission level (integer) if the user is found,
+                     otherwise None. Returns None on database error.
+    """
+    return user_management.get_permission(user_id)
+
+
 def create_playlist(user_id, playlist_name, playlist_permission):
     """
     Creates a new playlist for a user by delegating to playlists_management.create_playlist.

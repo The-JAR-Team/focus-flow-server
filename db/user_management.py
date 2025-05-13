@@ -1,6 +1,10 @@
 import bcrypt
 import uuid
 from datetime import datetime, timedelta
+
+import psycopg2.errors
+import psycopg2.extras
+
 from db.DB import DB
 
 
@@ -163,8 +167,7 @@ def get_user_info(user_id):
              "last_name": <str or null>,
              "email": <str or null>,
              "age": <int or null>,
-             "auth_token": <int or null>,
-             "auth_last_used": <str in ISO format or null>
+             "permission": <int or null>
           }
         }
       On failure:
@@ -173,7 +176,7 @@ def get_user_info(user_id):
     try:
         with DB.get_cursor() as cur:
             cur.execute(
-                'SELECT user_id, first_name, last_name, email, age FROM "User" WHERE user_id = %s',
+                'SELECT user_id, first_name, last_name, email, age, permission FROM "User" WHERE user_id = %s',
                 (user_id,)
             )
             row = cur.fetchone()
@@ -186,12 +189,51 @@ def get_user_info(user_id):
                 "last_name": row[2],
                 "email": row[3],
                 "age": row[4],
+                "permission": row[5],
             }
             return {"status": "success", "user": user_info}, 200
 
     except Exception as e:
         print("Error in get_user_info:", e)
         return {"status": "failed", "reason": "Error retrieving user info"}, 500
+
+
+def get_permission(user_id: int):
+    """
+    Retrieves the permission level for a given user_id.
+
+    Args:
+        user_id (int): The ID of the user.
+
+    Returns:
+        int or None: The permission level (integer) if the user is found,
+                     otherwise None. Returns None on database error.
+    """
+    permission_level = None
+    try:
+        with DB.get_cursor() as cur:
+            cur.execute(
+                'SELECT permission FROM "User" WHERE user_id = %s',
+                (user_id,)
+            )
+            row = cur.fetchone()
+            if row is not None:
+                permission_level = row[0]
+                # Handle case where permission might be NULL in DB, though default is 1
+                if permission_level is None:
+                     print(f"Permission is NULL in DB for user_id: {user_id}. Returning None.")
+            else:
+                print(f"User not found when retrieving permission for user_id: {user_id}")
+                permission_level = None # Explicitly None if user not found
+
+    except psycopg2.Error as db_err:
+        print(f"Database error retrieving permission for user_id {user_id}: {db_err}")
+        permission_level = None # Return None on DB error
+    except Exception as e:
+        print(f"Unexpected error retrieving permission for user_id {user_id}: {e}")
+        permission_level = None # Return None on unexpected error
+
+    return permission_level
 
 
 def logout_user(session_id):
