@@ -21,8 +21,8 @@ def send_registration_confirmation_email(user_id: int, email: str, first_name: s
 
     gmail_sender = os.getenv("GMAIL_SENDER_EMAIL")
     gmail_password = os.getenv("GMAIL_APP_PASSWORD")
-    app_confirmation_base_url = os.getenv("APP_CONFIRMATION_URL_BASE", "http://localhost:5000")
-    app_confirmation_url = app_confirmation_base_url + "/confirm_email"
+    app_confirmation_url = os.getenv("APP_CONFIRMATION_URL_BASE", "http://localhost:5000")
+
 
     if not gmail_sender or not gmail_password:
         error_message = "Email server not configured (missing GMAIL_SENDER_EMAIL or GMAIL_APP_PASSWORD)."
