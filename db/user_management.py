@@ -2,6 +2,7 @@ import bcrypt
 import uuid
 from datetime import datetime, timedelta
 
+import db.email_confirmation_management as ecm
 import psycopg2.errors
 import psycopg2.extras
 
@@ -10,94 +11,148 @@ from db.DB import DB
 
 def login_user(data):
     """
-    Login function:
-    Expects:
-      {
-         "email": <string>,
-         "password": <string>
-      }
-    On successful login, creates a new session entry in the Sessions table.
-    Returns a 4-tuple:
-      ( response_dict, http_status_code, session_id (str) or 0, user_id (int) or 0 )
+    Login function.
+    Expects: {"email": <string>, "password": <string>}
+    Returns a 3-tuple: (response_dict, http_status_code, session_id (str) or None)
     """
+    response_dict = {"status": "failed", "reason": "Login failed due to an unexpected server error."}
+    http_status_code = 500
+    session_id_to_return = None
+
     try:
-        with DB.get_cursor() as cur:
-            email = data.get("email")
-            password = data.get("password")
-            if not email or not password:
-                return {"status": "failed", "reason": "missing email or password"}, 401, 0
+        email = data.get("email")
+        password = data.get("password")
 
-            cur.execute('SELECT user_id, password FROM "User" WHERE email = %s', (email,))
-            result = cur.fetchone()
-            if result is None:
-                return {"status": "failed", "reason": "no such user is signed in"}, 401, 0
-            user_id, stored_password = result
+        if not email or not password:
+            response_dict = {"status": "failed", "reason": "Missing email or password."}
+            http_status_code = 400
+        else:
+            with DB.get_cursor() as cur:
+                # Fetch user_id, hashed password, and active status
+                cur.execute('SELECT user_id, password, active FROM "User" WHERE email = %s', (email,))
+                result = cur.fetchone()
+                if result is None:
+                    response_dict = {"status": "failed", "reason": "Email not registered or incorrect."}
+                    http_status_code = 401
+                else:
+                    user_id, stored_password_hash, is_active = result
 
-            # Verify password using bcrypt.
-            if not bcrypt.checkpw(password.encode('utf-8'), stored_password.encode('utf-8')):
-                return {"status": "failed", "reason": "incorrect password"}, 401, 0
-
-            session_id = str(uuid.uuid4())
-            expires_at = datetime.now() + timedelta(days=1)
-            cur.execute(
-                'INSERT INTO "Sessions" (session_id, user_id, created_at, expires_at) VALUES (%s, %s, NOW(), %s)',
-                (session_id, user_id, expires_at)
-            )
-            return {"status": "success", "reason": ""}, 200, session_id
+                    if not bcrypt.checkpw(password.encode('utf-8'), stored_password_hash.encode('utf-8')):
+                        response_dict = {"status": "failed", "reason": "Incorrect password."}
+                        http_status_code = 401
+                    elif not is_active:
+                        # User's credentials are correct, but account is not active
+                        response_dict, http_status_code = ecm.handle_inactive_user_login_attempt(user_id)
+                        # session_id_to_return remains None for inactive users
+                    else:
+                        # Credentials correct and user is active, proceed to create session
+                        generated_session_id = str(uuid.uuid4())
+                        expires_at = datetime.now() + timedelta(days=1)
+                        cur.execute(
+                            'INSERT INTO "Sessions" (session_id, user_id, created_at, expires_at) VALUES (%s, %s, NOW(), %s)',
+                            (generated_session_id, user_id, expires_at)
+                        )
+                        response_dict = {"status": "success", "reason": "Login successful.", "user_id": user_id}
+                        http_status_code = 200
+                        session_id_to_return = generated_session_id
     except Exception as e:
-        print(e)
-        return {"status": "failed", "reason": "failed login"}, 401, 0
+        print(f"TODO: Login exception: {e}")
+        # response_dict and http_status_code are already set to a default server error
+        # session_id_to_return remains None
+
+    return response_dict, http_status_code, session_id_to_return
 
 
 def register_user(data):
     """
-    Registers a new user and then logs them in.
-    Expects input data:
-      {
-         "email": <string>,
-         "password": <string>,
-         "first name": <string>,
-         "last name": <string>,
-         "age": <int>
-      }
-    After successful registration, automatically logs the user in.
-    Returns a 3-tuple:
-      ( response_dict, http_status_code, session_id (str) or 0 )
+    Registers a new user and initiates sending a confirmation email.
+    The user account will be created as inactive.
+    Expects input data: {"email": <string>, "password": <string>, "first name": <string>, "last name": <string>, "age": <int - optional>}
+    Returns a 2-tuple: (response_dict, http_status_code)
     """
+    response_dict = {"status": "failed", "reason": "Registration failed due to an unexpected server error."}
+    http_status_code = 500
+
     try:
-        with DB.get_cursor() as cur:
-            email = data.get("email")
-            password = data.get("password")
-            first_name = data.get("first name")
-            last_name = data.get("last name")
-            age = data.get("age")
-            if not email or not password or first_name is None or last_name is None or age is None:
-                return {"status": "failed", "reason": "missing required registration fields"}, 401, 0
+        email = data.get("email")
+        password = data.get("password")
+        first_name = data.get("first name")
+        last_name = data.get("last name")
+        age = data.get("age")  # Age is optional, handle if None
 
-            # Check if a user with the given email already exists.
-            cur.execute('SELECT user_id FROM "User" WHERE email = %s', (email,))
-            if cur.fetchone():
-                return {"status": "failed", "reason": "email already connected to an account"}, 401, 0
+        if not email or not password or not first_name or not last_name:
+            response_dict = {"status": "failed",
+                             "reason": "Missing required registration fields (email, password, first_name, last_name)."}
+            http_status_code = 400
+        else:
+            with DB.get_cursor() as cur:
+                cur.execute('SELECT user_id FROM "User" WHERE email = %s', (email,))
+                if cur.fetchone():
+                    response_dict = {"status": "failed", "reason": "This email address is already registered."}
+                    http_status_code = 409  # Conflict
+                else:
+                    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                    # User is inserted with active=FALSE by default (as per DB schema from previous steps)
+                    if age is not None:
+                        cur.execute(
+                            'INSERT INTO "User" (first_name, last_name, email, password, age) VALUES (%s, %s, %s, %s, %s) RETURNING user_id',
+                            (first_name, last_name, email, hashed_password, age)
+                        )
+                    else:
+                        cur.execute(
+                            'INSERT INTO "User" (first_name, last_name, email, password) VALUES (%s, %s, %s, %s) RETURNING user_id',
+                            (first_name, last_name, email, hashed_password)
+                        )
+                    user_row = cur.fetchone()
 
-            # Hash the password using bcrypt.
-            hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-            cur.execute(
-                'INSERT INTO "User" (first_name, last_name, email, password, age) VALUES (%s, %s, %s, %s, %s) RETURNING user_id',
-                (first_name, last_name, email, hashed_password, age)
-            )
-            user_row = cur.fetchone()
             if user_row is None:
-                return {"status": "failed", "reason": "failed to register user"}, 500, 0
-        # End of transaction for user registration; commit occurs upon exiting the context.
+                response_dict = {"status": "failed", "reason": "Failed to create user account in the database."}
+                # http_status_code remains 500
+            else:
+                user_id_registered = user_row[0]
 
-        # Log in the user immediately after registration.
-        login_response, status, session_id = login_user({"email": email, "password": password})
-        # Optionally, register as a creator here if needed.
-        return login_response, status, session_id
+                passcode_sent, email_error_msg = ecm.send_registration_confirmation_email(
+                    user_id=user_id_registered,
+                    email=email,
+                    first_name=first_name,
+                    last_name=last_name
+                )
+
+                if email_error_msg:
+                    print(
+                        f"TODO: Registration for {email} succeeded, but sending confirmation email failed: {email_error_msg}")
+                    response_dict = {
+                        "status": "success_with_warning",
+                        "user_id": user_id_registered,
+                        "message": "Registration successful, but confirmation email could not be sent. Please contact support or try resending confirmation.",
+                        "email_error_details": email_error_msg
+                    }
+                    http_status_code = 201  # Created, but with a follow-up needed
+                elif passcode_sent:
+                    response_dict = {
+                        "status": "success",
+                        "user_id": user_id_registered,
+                        "message": "Registration successful! Please check your email to activate your account."
+                    }
+                    http_status_code = 201  # Created
+                else:
+                    # This case implies email sending was skipped due to config but no direct error raised by mailer
+                    response_dict = {
+                        "status": "success_with_warning",
+                        "user_id": user_id_registered,
+                        "message": "Registration successful. Email server not configured; confirmation email not sent. Account is inactive."
+                    }
+                    http_status_code = 201
+
+    except psycopg2.errors.UniqueViolation:
+        response_dict = {"status": "failed",
+                         "reason": "This email address is already registered (encountered during insert)."}
+        http_status_code = 409
     except Exception as e:
-        print(e)
-        return {"status": "failed", "reason": "failed registration"}, 401, 0
+        print(f"TODO: Registration exception: {e}")
+        # response_dict and http_status_code are already set to a default server error
+
+    return response_dict, http_status_code
 
 
 def _validate_and_extend_session(session_id):
@@ -252,3 +307,55 @@ def logout_user(session_id):
     except Exception as e:
         print(f"Error logging out: {e}")
         return {"status": "failed", "reason": "Logout failed"}, 500
+
+
+def change_password(user_id: int, data: dict):
+    """
+    Changes the password for a given user_id.
+    Expects data: {"old_password": "<string>", "new_password": "<string>"}
+    Returns (response_dict, http_status_code).
+    """
+    response_dict = {"status": "failed", "reason": "Password change failed due to an unexpected server error."}
+    http_status_code = 500
+
+    try:
+        old_password = data.get("old_password")
+        new_password = data.get("new_password")
+
+        if not old_password or not new_password:
+            response_dict = {"status": "failed", "reason": "Missing old_password or new_password."}
+            http_status_code = 400
+        elif not isinstance(user_id, int) or user_id <= 0:
+            response_dict = {"status": "failed", "reason": "Invalid user_id."}
+            http_status_code = 400
+        else:
+            with DB.get_cursor() as cur:
+                cur.execute('SELECT password FROM "User" WHERE user_id = %s', (user_id,))
+                result = cur.fetchone()
+                if result is None:
+                    response_dict = {"status": "failed", "reason": "User not found."}
+                    http_status_code = 404
+                else:
+                    stored_password_hash = result[0]
+                    if not bcrypt.checkpw(old_password.encode('utf-8'), stored_password_hash.encode('utf-8')):
+                        response_dict = {"status": "failed", "reason": "Incorrect old password."}
+                        http_status_code = 401 # Unauthorized or 403 Forbidden could also be used
+                    else:
+                        new_hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                        cur.execute(
+                            'UPDATE "User" SET password = %s WHERE user_id = %s',
+                            (new_hashed_password, user_id)
+                        )
+                        if cur.rowcount == 1:
+                            response_dict = {"status": "success", "message": "Password changed successfully."}
+                            http_status_code = 200
+                        else:
+                            # This case should ideally not be reached if user was found and old password matched,
+                            # but it's a safeguard.
+                            response_dict = {"status": "failed", "reason": "Failed to update password in database."}
+                            # http_status_code remains 500
+    except Exception as e:
+        print(f"TODO: Change password exception for user_id {user_id}: {e}")
+        # response_dict and http_status_code are already set to a default server error
+
+    return response_dict, http_status_code

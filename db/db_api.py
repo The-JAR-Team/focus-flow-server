@@ -11,48 +11,24 @@ you'll find its expected input (arguments) and output (return values).
 from db import user_management, playlists_management, video_management, subscription_management, watch_management, \
     question_management, lock_management, transcript_manager, summary_management
 from db.video_management import get_accessible_videos
+import db.email_confirmation_management as ecm
 
 
 def login_user(data):
     """
-    Logs in a user by delegating to user_management.login_user.
-
-    Args:
-        data (dict): Must include:
-            {
-                "email": <str>,
-                "password": <str>
-            }
-
-    Returns:
-        tuple: (response_dict, http_status_code, session_id (str or 0), user_id (int or 0))
-          - response_dict (dict) has keys: "status" ("success" or "failed"), "reason" (<str>).
-          - http_status_code (int) e.g. 200 on success, 401 on failure.
-          - session_id (str or 0): The session ID if login succeeded; 0 if failed.
-          - user_id (int or 0): The user’s ID if login succeeded; 0 if failed.
+    Login function.
+    Expects: {"email": <string>, "password": <string>}
+    Returns a 3-tuple: (response_dict, http_status_code, session_id (str) or None)
     """
     return user_management.login_user(data)
 
 
 def register_user(data):
     """
-    Registers a new user by delegating to user_management.register_user.
-
-    Args:
-        data (dict): Must include:
-            {
-                "email": <str>,
-                "password": <str>,
-                "first name": <str>,
-                "last name": <str>,
-                "age": <int>
-            }
-
-    Returns:
-        tuple: (response_dict, http_status_code, session_id (str or 0))
-          - response_dict (dict) has keys: "status" ("success" or "failed"), "reason" (<str>).
-          - http_status_code (int) e.g. 200 on success, 401 on failure.
-          - session_id (str or 0): The new session ID if registration and auto-login succeeded; 0 otherwise.
+    Registers a new user and initiates sending a confirmation email.
+    The user account will be created as inactive.
+    Expects input data: {"email": <string>, "password": <string>, "first name": <string>, "last name": <string>, "age": <int - optional>}
+    Returns a 2-tuple: (response_dict, http_status_code)
     """
     return user_management.register_user(data)
 
@@ -633,3 +609,22 @@ def upsert_summary(youtube_id: str, language: str, summary_json: dict):
                                  Note: ON CONFLICT doesn't directly return this, so it's inferred.
     """
     return summary_management.upsert_summary(youtube_id, language, summary_json)
+
+
+def confirm_user_email(passcode_from_link: str):
+    """
+    Confirms a user's email based on the provided passcode.
+    Activates the user if the passcode is valid and not expired.
+    Uses UTC for all time comparisons.
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return ecm.confirm_user_email(passcode_from_link)
+
+
+def change_password(user_id: int, data: dict):
+    """
+    Changes the password for a given user_id.
+    Expects data: {"old_password": "<string>", "new_password": "<string>"}
+    Returns (response_dict, http_status_code).
+    """
+    return user_management.change_password(user_id, data)

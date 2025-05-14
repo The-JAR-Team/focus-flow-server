@@ -20,6 +20,12 @@ def get_authenticated_user(min_permission=0):
       - resp is a Flask response (that clears the session cookie),
       - user_id is 0,
       - status is an error code (e.g. 401).
+    arg:
+        min_permission (int): Minimum permission level required for the user, 0:guest 1:normal user, 2:admin
+    returns:
+        resp (Response): Flask response object, None if authentication succeeds
+        user_id (int): ID of the authenticated user, 0 if authentication fails
+        status (int): HTTP status code, 200 if authentication succeeds, error code if fails
     """
     session_id = request.cookies.get('session_id')
     if not session_id:
