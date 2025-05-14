@@ -8,7 +8,7 @@ from db.DB import DB  # Assuming DB.py is in a 'db' subdirectory
 
 # --- Constants ---
 CONFIRMATION_VALIDITY_MINUTES = 10
-EMAIL_SEND_DELAY_SECONDS = 5
+EMAIL_SEND_DELAY_SECONDS = 3
 
 
 def send_registration_confirmation_email(user_id: int, email: str, first_name: str, last_name: str):

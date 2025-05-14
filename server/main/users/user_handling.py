@@ -154,9 +154,12 @@ def confirm_email_endpoint():
     """
     Confirms a user's email address using a passcode from a query parameter.
     Example: GET /confirm_email?passcode=YOUR_PASSCODE_HERE
-    Returns an HTML page indicating success or failure.
+    Returns an HTML page indicating success or failure, with a redirect timer.
     """
     passcode = request.args.get('passcode')
+    site_login_url = os.getenv('SITE_LOGIN_URL', 'http://localhost:3000/')
+
+    # Enhanced HTML and CSS for a more modern look
     html_response_template = """
     <!DOCTYPE html>
     <html lang="en">
@@ -164,54 +167,153 @@ def confirm_email_endpoint():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Email Confirmation</title>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
         <style>
-            body {{ font-family: Arial, sans-serif; margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; background-color: #f4f7f6; text-align: center; }}
-            .container {{ background-color: #fff; padding: 30px 40px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }}
-            h1 {{ margin-top: 0; }}
-            .success h1 {{ color: #28a745; }}
-            .error h1 {{ color: #dc3545; }}
-            p {{ color: #555; font-size: 1.1em; }}
-            a {{ color: #007bff; text-decoration: none; font-weight: bold; }}
-            a:hover {{ text-decoration: underline; }}
+            body {{
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                margin: 0;
+                padding: 20px;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                min-height: 95vh; /* Adjusted for better centering */
+                background-color: #eef2f7; /* Lighter, softer background */
+                color: #334155; /* Slate text color */
+                text-align: center;
+                -webkit-font-smoothing: antialiased;
+                -moz-osx-font-smoothing: grayscale;
+            }}
+            .container {{
+                background-color: #ffffff;
+                padding: 40px 50px; /* Increased padding */
+                border-radius: 12px; /* More rounded corners */
+                box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08), 0 5px 10px rgba(0, 0, 0, 0.04); /* Softer shadow */
+                max-width: 550px;
+                width: 100%;
+                border: 1px solid #e2e8f0; /* Subtle border */
+            }}
+            h1 {{
+                margin-top: 0;
+                margin-bottom: 20px; /* Space below h1 */
+                font-size: 2.25em; /* Larger title */
+                font-weight: 700; /* Bolder title */
+                line-height: 1.2;
+            }}
+            .success h1 {{
+                color: #10b981; /* Emerald green for success */
+            }}
+            .error h1 {{
+                color: #ef4444; /* Red for error */
+            }}
+            p {{
+                color: #475569; /* Slightly lighter text for paragraphs */
+                font-size: 1.1em;
+                line-height: 1.7;
+                margin-bottom: 25px; /* More space below paragraphs */
+            }}
+            .redirect-message {{
+                margin-top: 25px;
+                font-size: 0.95em;
+                color: #64748b; /* Lighter slate for redirect message */
+            }}
+            #countdown {{
+                font-weight: 600;
+                color: #334155;
+            }}
+            .button {{
+                display: inline-block;
+                padding: 14px 32px; /* Adjusted padding */
+                margin-top: 15px; /* Space above button */
+                background-color: #3b82f6; /* Tailwind blue-500 */
+                color: white !important;
+                text-decoration: none;
+                border-radius: 8px; /* More rounded button */
+                font-weight: 600;
+                font-size: 1.05em;
+                border: none;
+                cursor: pointer;
+                transition: background-color 0.2s ease-in-out, transform 0.1s ease-in-out;
+                box-shadow: 0 4px 6px rgba(59, 130, 246, 0.2); /* Subtle shadow for button */
+            }}
+            .button:hover {{
+                background-color: #2563eb; /* Tailwind blue-600 */
+                transform: translateY(-1px); /* Slight lift on hover */
+            }}
+            .icon {{
+                font-size: 3em;
+                margin-bottom: 15px;
+            }}
+            .success .icon {{ color: #10b981; }}
+            .error .icon {{ color: #ef4444; }}
+
         </style>
     </head>
     <body>
         <div class="container {status_class}">
+            <div class="icon">{icon}</div>
             <h1>{title}</h1>
             <p>{message}</p>
+            <button id="redirectButton" class="button">Proceed to Login</button>
+            <p class="redirect-message">You will be redirected in <span id="countdown">10</span> seconds...</p>
         </div>
+        <script>
+            let countdown = 10;
+            const countdownElement = document.getElementById('countdown');
+            const redirectButton = document.getElementById('redirectButton');
+            const loginUrl = "{login_url}"; // This will be replaced by Flask
+
+            function redirectToLogin() {{
+                window.location.href = loginUrl;
+            }}
+
+            redirectButton.onclick = redirectToLogin;
+
+            const interval = setInterval(() => {{
+                countdown--;
+                if (countdownElement) {{
+                    countdownElement.textContent = countdown;
+                }}
+                if (countdown <= 0) {{
+                    clearInterval(interval);
+                    redirectToLogin();
+                }}
+            }}, 1000);
+        </script>
     </body>
     </html>
     """
 
+    status_class_val = "error"
+    title_val = "Confirmation Failed"
+    message_val = "An unexpected error occurred."
+    icon_val = "&#10060;"  # Cross mark (X)
+    current_status_code = 400
+
     if not passcode:
-        # Render error HTML for missing passcode
-        rendered_html = html_response_template.format(
-            status_class="error",
-            title="Confirmation Failed",
-            message="Passcode query parameter is missing. Please use the link provided in your email."
-        )
-        response = make_response(rendered_html, 400)
-        response.headers['Content-Type'] = 'text/html'
-        return response
-
-    # confirm_user_email is from email_confirmation_management.py
-    response_data, status_code = ecm.confirm_user_email(passcode)
-
-    if status_code == 200 and response_data.get("status") == "success":
-        rendered_html = html_response_template.format(
-            status_class="success",
-            title="Email Confirmed!",
-            message=response_data.get("message", "Your account has been successfully activated.")
-        )
+        message_val = "Passcode query parameter is missing. Please use the link provided in your email."
+        icon_val = "&#⚠️;"  # Warning sign
     else:
-        rendered_html = html_response_template.format(
-            status_class="error",
-            title="Confirmation Failed",
-            message=response_data.get("reason",
-                                      "An error occurred during confirmation. Please try again or contact support.")
-        )
+        response_data, status_code_from_ecm = ecm.confirm_user_email(passcode)
+        current_status_code = status_code_from_ecm
 
-    response = make_response(rendered_html, status_code)
+        if status_code_from_ecm == 200 and response_data.get("status") == "success":
+            status_class_val = "success"
+            title_val = "Email Confirmed!"
+            message_val = response_data.get("message", "Your account has been successfully activated.")
+            icon_val = "&#10004;"  # Check mark
+        else:
+            message_val = response_data.get("reason",
+                                            "An error occurred during confirmation. Please try again or contact support.")
+            # icon_val remains cross mark or could be a specific error icon
+
+    rendered_html = html_response_template.format(
+        status_class=status_class_val,
+        title=title_val,
+        message=message_val,
+        icon=icon_val,
+        login_url=site_login_url
+    )
+    response = make_response(rendered_html, current_status_code)
     response.headers['Content-Type'] = 'text/html'
     return response
