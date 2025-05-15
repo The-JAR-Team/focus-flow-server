@@ -1,4 +1,5 @@
 import sqlparse
+import psycopg2
 from sqlparse.tokens import DML
 from tabulate import tabulate
 from flask import Blueprint, request, jsonify
@@ -76,11 +77,6 @@ def execute_sql():
         if not sql_query:
             return jsonify({"error": "No SQL query provided."}), 400
 
-        # Parse and validate the SQL query
-        # parsed = sqlparse.parse(sql_query)
-        # if not is_select_query(parsed):
-        #     return jsonify({"error": "Only single SELECT statements are allowed."}), 403
-
         # Get the 'type' query parameter, defaulting to 'html'
         type_param = request.args.get('type', 'html').lower()
         if type_param not in ['html', 'string_table', 'data']:
@@ -89,8 +85,19 @@ def execute_sql():
         # Execute the query using your PostgreSQL DB class
         with DB.get_cursor() as cursor:
             cursor.execute(sql_query)
-            rows = cursor.fetchall()
-            headers = [desc[0] for desc in cursor.description]  # Extract column names
+            rows = []
+            headers = []
+            try:
+                # Fetch all results
+                rows = cursor.fetchall()
+                headers = [desc[0] for desc in cursor.description]  # Extract column names
+            except psycopg2.ProgrammingError as e:
+                if "no results to fetch" in str(e):
+                    headers = ['Status']
+                    rows = [['Execution successful, no results returned.']]
+                    pass
+                else:
+                    raise
 
         # Format and return the results based on 'type' parameter
         if type_param == 'html':
