@@ -85,8 +85,6 @@ def execute_sql():
         # Execute the query using your PostgreSQL DB class
         with DB.get_cursor() as cursor:
             cursor.execute(sql_query)
-            rows = []
-            headers = []
             try:
                 # Fetch all results
                 rows = cursor.fetchall()
