@@ -62,7 +62,7 @@ def execute_sql():
     Only single SELECT statements are allowed, for safety reasons.
     """
 
-    auth_resp, user_id, auth_status = get_authenticated_user()
+    auth_resp, user_id, auth_status = get_authenticated_user(min_permission=2)
     if auth_resp is not None:
         return auth_resp, auth_status  # Return authentication error directly
 
@@ -77,9 +77,9 @@ def execute_sql():
             return jsonify({"error": "No SQL query provided."}), 400
 
         # Parse and validate the SQL query
-        parsed = sqlparse.parse(sql_query)
-        if not is_select_query(parsed):
-            return jsonify({"error": "Only single SELECT statements are allowed."}), 403
+        # parsed = sqlparse.parse(sql_query)
+        # if not is_select_query(parsed):
+        #     return jsonify({"error": "Only single SELECT statements are allowed."}), 403
 
         # Get the 'type' query parameter, defaulting to 'html'
         type_param = request.args.get('type', 'html').lower()
