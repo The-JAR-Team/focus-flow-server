@@ -2,17 +2,126 @@
 db_api.py
 
 This module acts as an aggregator for user, playlist, video, subscription,
-watch item, and question operations. All functions delegate to the corresponding
+watch item, question, and group operations. All functions delegate to the corresponding
 functions in user_management, playlists_management, video_management,
-subscription_management, watch_management, or question_management. Below each function,
-you'll find its expected input (arguments) and output (return values).
+subscription_management, watch_management, question_management, or group_management.
+Below each function, you'll find its expected input (arguments) and output (return values).
 """
 
-from db import user_management, playlists_management, video_management, subscription_management, watch_management, \
-    question_management, lock_management, transcript_manager, summary_management
+from db import (
+    user_management,
+    playlists_management,
+    video_management,
+    subscription_management,
+    watch_management,
+    question_management,
+    lock_management,
+    transcript_manager,
+    summary_management,
+    group_management # Added group_management
+)
 from db.video_management import get_accessible_videos
 import db.email_confirmation_management as ecm
 
+# ... (all your existing functions from login_user down to change_password remain unchanged) ...
+
+
+# --- Group Management Functions ---
+
+def create_group(data: dict, user_id: int):
+    """
+    Creates a new group for the given user.
+    Delegates to group_management.create_group.
+    Expects data: {"group_name": <string>, "description": <string (optional)>}
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.create_group(data, user_id)
+
+
+def update_group(data: dict, user_id: int):
+    """
+    Updates an existing group for the given user.
+    Delegates to group_management.update_group.
+    Expects data: {"old_group_name": <string>, "new_group_name": <string (optional)>, "new_description": <string (optional)>}
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.update_group(data, user_id)
+
+
+def get_group_names(user_id: int):
+    """
+    Retrieves all group names, descriptions, and timestamps for a given user.
+    Delegates to group_management.get_group_names.
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.get_group_names(user_id)
+
+
+def get_groups(user_id: int):
+    """
+    Retrieves all groups for a user, including all items (videos and playlists) within each group.
+    Delegates to group_management.get_groups.
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.get_groups(user_id)
+
+
+def get_group(user_id: int, group_name: str):
+    """
+    Retrieves a specific group for a user by name, including its items.
+    Delegates to group_management.get_group.
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.get_group(user_id, group_name)
+
+
+def insert_group_item(data: dict, user_id: int):
+    """
+    Inserts an item (video or playlist) into a user's group.
+    Delegates to group_management.insert_group_item.
+    Expects data: {"group_name": <string>, "item_type": <"video" or "playlist">, "item_id": <int>}
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.insert_group_item(data, user_id)
+
+
+def remove_group_item(data: dict, user_id: int):
+    """
+    Removes an item (video or playlist) from a user's group.
+    Delegates to group_management.remove_group_item.
+    Expects data: {"group_name": <string>, "item_type": <"video" or "playlist">, "item_id": <int>}
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.remove_group_item(data, user_id)
+
+
+def remove_group(data: dict, user_id: int):
+    """
+    Removes a group and all its items for a user.
+    Delegates to group_management.remove_group.
+    Expects data: {"group_name": <string>}
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.remove_group(data, user_id)
+
+
+def switch_group_item_placement(data: dict, user_id: int):
+    """
+    Switches the placement (item_order) of two items within a user's group.
+    Delegates to group_management.switch_group_item_placement.
+    Expects data: {
+        "group_name": <string>,
+        "item_type": <"video" or "playlist">,
+        "order1": <int>,
+        "order2": <int>
+    }
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.switch_group_item_placement(data, user_id)
+
+# --- Existing functions below this line ---
+# (Make sure the new functions are added before any final existing functions if order matters,
+# or simply at the end of the function definitions section)
 
 def login_user(data):
     """
@@ -410,7 +519,7 @@ def logout_user(session_id):
     return user_management.logout_user(session_id)
 
 
-from db import subscription_management
+from db import subscription_management # This is a duplicate import, can be removed if playlists_management handles these
 
 
 def get_playlist_subscribers(owner_id, playlist_id):
@@ -432,6 +541,8 @@ def get_playlist_subscribers(owner_id, playlist_id):
           - On failure:
               { "status": "failed", "reason": <error message> }
     """
+    # Assuming playlists_management.get_playlist_subscribers is the correct one based on your existing code.
+    # If these were meant to be from subscription_management directly, change playlists_management to subscription_management
     return playlists_management.get_playlist_subscribers(owner_id, playlist_id)
 
 
@@ -454,6 +565,7 @@ def get_playlist_subscriber_count(owner_id, playlist_id):
           - On failure:
               { "status": "failed", "reason": <error message> }
     """
+    # Assuming playlists_management.get_playlist_subscriber_count is the correct one.
     return playlists_management.get_playlist_subscriber_count(owner_id, playlist_id)
 
 

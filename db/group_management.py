@@ -3,6 +3,7 @@ from datetime import datetime
 
 from db.DB import DB
 import group_item_management as gim  # For managing group items
+from db.video_management import get_accessible_videos
 
 
 # --- Helper to get group_id and next_item_order ---
@@ -26,6 +27,19 @@ def _get_group_details(cursor, user_id: int, group_name: str):
     except Exception as e:
         print(f"TODO: Error in _get_group_details for user {user_id}, group {group_name}: {e}")
     return group_id_found, next_order_val
+
+
+def _get_user_accessible_item_ids(user_id: int):
+    accessible_video_ids = set()
+    accessible_playlist_ids = set()
+    accessible_content = get_accessible_videos(user_id) # from video_management
+
+    if accessible_content.get("status") == "success":
+        for pl_data in accessible_content.get("playlists", []):
+            accessible_playlist_ids.add(pl_data.get("playlist_id"))
+            for vid_item in pl_data.get("playlist_items", []):
+                accessible_video_ids.add(vid_item.get("video_id"))
+    return accessible_video_ids, accessible_playlist_ids, accessible_content.get("status") == "success"
 
 
 def _increment_group_next_item_order(cursor, group_id: int):
@@ -230,191 +244,278 @@ def get_group_names(user_id: int):
 
 
 def get_groups(user_id: int):
-    """
-    Retrieves all groups for a user, including all items (videos and playlists) within each group.
-    Returns a tuple: (response_dict, http_status_code)
-    """
     response_dict = {"status": "failed", "reason": "Failed to retrieve groups and items."}
     http_status_code = 500
     final_groups_data = []
+    removed_items_report = [] # To report items auto-removed
 
     if not isinstance(user_id, int) or user_id <= 0:
         response_dict = {"status": "failed", "reason": "Invalid user_id."}
         http_status_code = 400
-    else:
-        try:
-            with DB.get_cursor() as cur:
-                cur.execute(
-                    'SELECT group_id, group_name, description, created_at, updated_at, next_item_order FROM "Group" WHERE user_id = %s ORDER BY group_name',
-                    (user_id,)
-                )
-                groups = cur.fetchall()
+        return response_dict, http_status_code
 
-                for group_row in groups:
-                    group_id, group_name, description, created_at, updated_at, next_item_order = group_row
+    try:
+        accessible_video_ids, accessible_playlist_ids, can_check_accessibility = _get_user_accessible_item_ids(user_id)
+        if not can_check_accessibility:
+            response_dict = {"status": "failed", "reason": "Could not verify item accessibility for cleanup."}
+            http_status_code = 500
+            return response_dict, http_status_code
 
-                    videos_in_group = gim.get_videos_for_group(cur, group_id)
-                    playlists_in_group = gim.get_playlists_for_group(cur, group_id)
+        with DB.get_cursor() as cur:
+            cur.execute(
+                'SELECT group_id, group_name, description, created_at, updated_at, next_item_order FROM "Group" WHERE user_id = %s ORDER BY group_name',
+                (user_id,)
+            )
+            groups = cur.fetchall()
 
-                    group_data = {
-                        "group_id": group_id,
-                        "group_name": group_name,
-                        "description": description,
-                        "created_at": created_at.isoformat() if created_at else None,
-                        "updated_at": updated_at.isoformat() if updated_at else None,
-                        "next_item_order": next_item_order,
-                        "videos": videos_in_group,
-                        "playlists": playlists_in_group
-                    }
-                    final_groups_data.append(group_data)
+            for group_row in groups:
+                group_id, group_name, description, created_at, updated_at, next_item_order = group_row
 
-                response_dict = {"status": "success", "groups": final_groups_data}
-                http_status_code = 200
-        except Exception as e:
-            print(f"TODO: Error in get_groups: {e}")
-            response_dict["reason"] = f"An unexpected error occurred: {str(e)}"
+                # Get raw items from group
+                raw_videos_in_group = gim.get_videos_for_group(cur, group_id)
+                raw_playlists_in_group = gim.get_playlists_for_group(cur, group_id)
+
+                # Filter and collect items to remove
+                valid_videos_in_group = []
+                for video_item in raw_videos_in_group:
+                    if video_item.get("video_id") in accessible_video_ids:
+                        valid_videos_in_group.append(video_item)
+                    else:
+                        # Item is in group but not accessible or doesn't exist, remove it
+                        gim.remove_video_from_group(cur, group_id, video_item.get("video_id"))
+                        removed_items_report.append({
+                            "group_id": group_id, "group_name": group_name,
+                            "item_type": "video", "item_id": video_item.get("video_id"),
+                            "reason": "Not accessible or no longer exists"
+                        })
+
+                valid_playlists_in_group = []
+                for playlist_item in raw_playlists_in_group:
+                    if playlist_item.get("playlist_id") in accessible_playlist_ids:
+                        valid_playlists_in_group.append(playlist_item)
+                    else:
+                        gim.remove_playlist_from_group(cur, group_id, playlist_item.get("playlist_id"))
+                        removed_items_report.append({
+                            "group_id": group_id, "group_name": group_name,
+                            "item_type": "playlist", "item_id": playlist_item.get("playlist_id"),
+                            "reason": "Not accessible or no longer exists"
+                        })
+                        # Note: If a playlist is removed, its next_item_order in the group might need re-evaluation
+                        # if we were compacting orders, but current gim.remove_... doesn't do that.
+
+                group_data = {
+                    "group_id": group_id,
+                    "group_name": group_name,
+                    "description": description,
+                    "created_at": created_at.isoformat() if created_at else None,
+                    "updated_at": updated_at.isoformat() if updated_at else None,
+                    "next_item_order": next_item_order,
+                    "videos": valid_videos_in_group,
+                    "playlists": valid_playlists_in_group
+                }
+                final_groups_data.append(group_data)
+
+            response_dict = {"status": "success", "groups": final_groups_data}
+            if removed_items_report:
+                response_dict["removed_items_info"] = removed_items_report
+            http_status_code = 200
+
+    except Exception as e:
+        print(f"Error in get_groups: {e}")
+        response_dict["reason"] = f"An unexpected error occurred: {str(e)}"
+        http_status_code = 500
 
     return response_dict, http_status_code
 
 
 def get_group(user_id: int, group_name: str):
-    """
-    Retrieves a specific group for a user by name, including its items.
-    Returns a tuple: (response_dict, http_status_code)
-    """
     response_dict = {"status": "failed", "reason": "Failed to retrieve group."}
     http_status_code = 500
-    group_data_to_return = None
+    removed_items_report = []
 
     if not group_name:
         response_dict = {"status": "failed", "reason": "group_name is required."}
         http_status_code = 400
-    elif not isinstance(user_id, int) or user_id <= 0:
+        return response_dict, http_status_code
+    if not isinstance(user_id, int) or user_id <= 0:
         response_dict = {"status": "failed", "reason": "Invalid user_id."}
         http_status_code = 400
-    else:
-        try:
-            with DB.get_cursor() as cur:
-                cur.execute(
-                    'SELECT group_id, description, created_at, updated_at, next_item_order FROM "Group" WHERE user_id = %s AND group_name = %s',
-                    (user_id, group_name)
-                )
-                group_info = cur.fetchone()
+        return response_dict, http_status_code
 
-                if not group_info:
-                    response_dict = {"status": "failed", "reason": f"Group '{group_name}' not found for this user."}
-                    http_status_code = 404
-                else:
-                    group_id, description, created_at, updated_at, next_item_order = group_info
+    try:
+        accessible_video_ids, accessible_playlist_ids, can_check_accessibility = _get_user_accessible_item_ids(user_id)
+        if not can_check_accessibility:
+            response_dict = {"status": "failed", "reason": "Could not verify item accessibility for cleanup."}
+            http_status_code = 500
+            return response_dict, http_status_code
 
-                    videos_in_group = gim.get_videos_for_group(cur, group_id)
-                    playlists_in_group = gim.get_playlists_for_group(cur, group_id)
+        with DB.get_cursor() as cur:
+            cur.execute(
+                'SELECT group_id, description, created_at, updated_at, next_item_order FROM "Group" WHERE user_id = %s AND group_name = %s',
+                (user_id, group_name)
+            )
+            group_info = cur.fetchone()
 
-                    group_data_to_return = {
-                        "group_id": group_id,
-                        "group_name": group_name,
-                        "description": description,
-                        "created_at": created_at.isoformat() if created_at else None,
-                        "updated_at": updated_at.isoformat() if updated_at else None,
-                        "next_item_order": next_item_order,
-                        "videos": videos_in_group,
-                        "playlists": playlists_in_group
-                    }
-                    response_dict = {"status": "success", "group": group_data_to_return}
-                    http_status_code = 200
-        except Exception as e:
-            print(f"TODO: Error in get_group: {e}")
-            response_dict["reason"] = f"An unexpected error occurred: {str(e)}"
+            if not group_info:
+                response_dict = {"status": "failed", "reason": f"Group '{group_name}' not found for this user."}
+                http_status_code = 404
+            else:
+                group_id, description, created_at, updated_at, next_item_order = group_info
+
+                raw_videos_in_group = gim.get_videos_for_group(cur, group_id)
+                raw_playlists_in_group = gim.get_playlists_for_group(cur, group_id)
+
+                valid_videos_in_group = []
+                for video_item in raw_videos_in_group:
+                    if video_item.get("video_id") in accessible_video_ids:
+                        valid_videos_in_group.append(video_item)
+                    else:
+                        gim.remove_video_from_group(cur, group_id, video_item.get("video_id"))
+                        removed_items_report.append({
+                            "group_id": group_id, "group_name": group_name,
+                            "item_type": "video", "item_id": video_item.get("video_id"),
+                            "reason": "Not accessible or no longer exists"
+                        })
+
+                valid_playlists_in_group = []
+                for playlist_item in raw_playlists_in_group:
+                    if playlist_item.get("playlist_id") in accessible_playlist_ids:
+                        valid_playlists_in_group.append(playlist_item)
+                    else:
+                        gim.remove_playlist_from_group(cur, group_id, playlist_item.get("playlist_id"))
+                        removed_items_report.append({
+                            "group_id": group_id, "group_name": group_name,
+                            "item_type": "playlist", "item_id": playlist_item.get("playlist_id"),
+                            "reason": "Not accessible or no longer exists"
+                        })
+
+                group_data_to_return = {
+                    "group_id": group_id,
+                    "group_name": group_name,
+                    "description": description,
+                    "created_at": created_at.isoformat() if created_at else None,
+                    "updated_at": updated_at.isoformat() if updated_at else None,
+                    "next_item_order": next_item_order,
+                    "videos": valid_videos_in_group,
+                    "playlists": valid_playlists_in_group
+                }
+                response_dict = {"status": "success", "group": group_data_to_return}
+                if removed_items_report:
+                    response_dict["removed_items_info"] = removed_items_report
+                http_status_code = 200
+    except Exception as e:
+        print(f"Error in get_group: {e}")
+        response_dict["reason"] = f"An unexpected error occurred: {str(e)}"
+        http_status_code = 500
 
     return response_dict, http_status_code
 
 
 def insert_group_item(data: dict, user_id: int):
-    """
-    Inserts an item (video or playlist) into a user's group, assigning it the next available order.
-    If the group doesn't exist, it's created.
-    Expects data: {"group_name": <string>, "item_type": <"video" or "playlist">, "item_id": <int>}
-    Returns a tuple: (response_dict, http_status_code)
-    """
     response_dict = {"status": "failed", "reason": "Failed to add item to group."}
     http_status_code = 500
 
     group_name = data.get("group_name")
     item_type = data.get("item_type")
-    item_id = data.get("item_id")
-    # item_order is now determined by next_item_order from Group table
+    item_id = data.get("item_id") # This is video_id or playlist_id
 
     if not group_name or not item_type or item_id is None:
         response_dict = {"status": "failed", "reason": "group_name, item_type, and item_id are required."}
         http_status_code = 400
-    elif item_type not in ["video", "playlist"]:
+        return response_dict, http_status_code
+    if item_type not in ["video", "playlist"]:
         response_dict = {"status": "failed", "reason": "Invalid item_type. Must be 'video' or 'playlist'."}
         http_status_code = 400
-    elif not isinstance(user_id, int) or user_id <= 0:
+        return response_dict, http_status_code
+    if not isinstance(user_id, int) or user_id <= 0: # Should be caught by auth, but good to have
         response_dict = {"status": "failed", "reason": "Invalid user_id."}
         http_status_code = 400
-    elif not isinstance(item_id, int) or item_id <= 0:
+        return response_dict, http_status_code
+    if not isinstance(item_id, int) or item_id <= 0:
         response_dict = {"status": "failed", "reason": "Invalid item_id."}
         http_status_code = 400
-    else:
-        try:
-            with DB.get_cursor() as cur:
-                group_id_to_use, assigned_order = _get_group_details(cur, user_id, group_name)
-                item_added_successfully = False
+        return response_dict, http_status_code
 
-                if not group_id_to_use:
-                    # Group doesn't exist, create it. next_item_order will default to 1.
-                    cur.execute(
-                        'INSERT INTO "Group" (user_id, group_name) VALUES (%s, %s) RETURNING group_id, next_item_order',
-                        (user_id, group_name)
-                    )
-                    group_id_row = cur.fetchone()
-                    if not group_id_row:
-                        # This should not happen if INSERT RETURNING is used and no error
-                        raise Exception("Critical: Failed to create group during item insertion and retrieve ID.")
-                    group_id_to_use = group_id_row[0]
-                    assigned_order = group_id_row[1]  # This will be 1 for a new group
-                    print(
-                        f"TODO: Group '{group_name}' created for user {user_id} with id {group_id_to_use}, next_order: {assigned_order}")
+    try:
+        # Get all items accessible by the user
+        # NOTE: get_accessible_videos might make its own DB call.
+        # If insert_group_item is already within a DB.get_cursor() context,
+        # you might need to adjust how get_accessible_videos is called or
+        # fetch this information outside the main transaction if it's too complex.
+        # For this example, assuming get_accessible_videos can be called here.
+        accessible_content = get_accessible_videos(user_id)  # from video_management
+        if accessible_content.get("status") != "success":
+            response_dict = {"status": "failed", "reason": "Could not verify item accessibility."}
+            http_status_code = 500
+            return response_dict, http_status_code
 
-                # Use assigned_order (which is the current next_item_order) for the new item
-                if item_type == "video":
-                    item_added_successfully = gim.add_video_to_group(cur, group_id_to_use, item_id, assigned_order)
-                elif item_type == "playlist":
-                    item_added_successfully = gim.add_playlist_to_group(cur, group_id_to_use, item_id, assigned_order)
+        is_accessible = False
+        if item_type == "video":
+            for pl in accessible_content.get("playlists", []):
+                for vid_item in pl.get("playlist_items", []):
+                    if vid_item.get("video_id") == item_id:
+                        is_accessible = True
+                        break
+                if is_accessible:
+                    break
+        elif item_type == "playlist":
+            for pl in accessible_content.get("playlists", []):
+                if pl.get("playlist_id") == item_id:
+                    is_accessible = True
+                    break
 
-                if item_added_successfully:
-                    # Increment next_item_order for the group
-                    if _increment_group_next_item_order(cur, group_id_to_use):
-                        response_dict = {
-                            "status": "success",
-                            "message": f"{item_type.capitalize()} with ID {item_id} added to group '{group_name}' at order {assigned_order}."
-                        }
-                        http_status_code = 201
-                    else:
-                        response_dict = {"status": "failed",
-                                         "reason": "Item added but failed to update group order. Operation rolled back."}
-                        http_status_code = 500
-                        raise Exception("Failed to increment group order after item insertion.")
+        if not is_accessible:
+            response_dict = {"status": "failed", "reason": f"{item_type.capitalize()} ID {item_id} is not accessible to the user."}
+            http_status_code = 403 # Forbidden
+            return response_dict, http_status_code
+
+        # Proceed with insertion if accessible
+        with DB.get_cursor() as cur:
+            group_id_to_use, assigned_order = _get_group_details(cur, user_id, group_name)
+            item_added_successfully = False
+
+            if not group_id_to_use:
+                cur.execute(
+                    'INSERT INTO "Group" (user_id, group_name) VALUES (%s, %s) RETURNING group_id, next_item_order',
+                    (user_id, group_name)
+                )
+                group_id_row = cur.fetchone()
+                if not group_id_row:
+                    raise Exception("Critical: Failed to create group during item insertion.")
+                group_id_to_use = group_id_row[0]
+                assigned_order = group_id_row[1]
+
+            if item_type == "video":
+                item_added_successfully = gim.add_video_to_group(cur, group_id_to_use, item_id, assigned_order)
+            elif item_type == "playlist":
+                item_added_successfully = gim.add_playlist_to_group(cur, group_id_to_use, item_id, assigned_order)
+
+            if item_added_successfully:
+                if _increment_group_next_item_order(cur, group_id_to_use):
+                    response_dict = {
+                        "status": "success",
+                        "message": f"{item_type.capitalize()} with ID {item_id} added to group '{group_name}' at order {assigned_order}."
+                    }
+                    http_status_code = 201
                 else:
-                    # This means gim.add_..._to_group returned False (e.g. unique violation for item/order, or FK violation)
-                    response_dict = {"status": "failed",
-                                     "reason": f"Failed to add {item_type} ID {item_id} to group. It might already exist or the item ID is invalid."}
-                    http_status_code = 409  # Or 404 if item_id was invalid and gim indicates that
+                    # This case should ideally lead to a rollback by the context manager
+                    response_dict = {"status": "failed", "reason": "Item added but failed to update group order."}
+                    http_status_code = 500
+                    raise Exception("Failed to increment group order after item insertion.") # Ensures rollback
+            else:
+                response_dict = {"status": "failed", "reason": f"Failed to add {item_type} ID {item_id} to group. It might already exist in the group with this order, or the item ID is invalid."}
+                http_status_code = 409
 
-        except psycopg2.errors.UniqueViolation as e:
-            # This primarily catches unique violation for group name if creation was attempted and failed due to race.
-            # Item-level unique violations within gim functions should ideally be handled by their False return.
-            response_dict = {"status": "failed",
-                             "reason": f"A group named '{group_name}' might already exist, or the item is already in the group with that order. Details: {e}"}
-            http_status_code = 409
-        except psycopg2.errors.ForeignKeyViolation:
-            # This would catch if the item_id (video_id/playlist_id) does not exist in their respective tables.
-            response_dict = {"status": "failed", "reason": f"The specified {item_type} ID {item_id} does not exist."}
-            http_status_code = 404
-        except Exception as e:
-            print(f"TODO: Error in insert_group_item: {e}")
-            response_dict["reason"] = f"An unexpected error occurred: {str(e)}"
+    except psycopg2.errors.UniqueViolation:
+        response_dict = {"status": "failed", "reason": f"A group named '{group_name}' might already exist, or the item is already in the group with that order."}
+        http_status_code = 409
+    except psycopg2.errors.ForeignKeyViolation:
+        response_dict = {"status": "failed", "reason": f"The specified {item_type} ID {item_id} does not exist in its respective table."}
+        http_status_code = 404 # Not Found for the item itself
+    except Exception as e:
+        print(f"Error in insert_group_item: {e}")
+        response_dict["reason"] = f"An unexpected error occurred: {str(e)}"
+        http_status_code = 500 # Ensure status code is 500 for general exceptions
 
     return response_dict, http_status_code
 
@@ -463,8 +564,6 @@ def remove_group_item(data: dict, user_id: int):
                         response_dict = {"status": "success",
                                          "message": f"{item_type.capitalize()} with ID {item_id} removed from group '{group_name}'."}
                         http_status_code = 200
-                        # todo: Consider if item_order values need to be re-sequenced (compacted) after a deletion.
-                        # For now, they will have gaps. This also means next_item_order does not need to be decremented.
                     else:
                         response_dict = {"status": "failed",
                                          "reason": f"{item_type.capitalize()} with ID {item_id} not found in group '{group_name}'."}

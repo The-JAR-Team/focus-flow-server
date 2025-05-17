@@ -50,25 +50,103 @@ def get_authenticated_user(min_permission=0):
 
 
 def check_authenticated_video(youtube_id, user_id):
+    """
+    Checks if a user is authorized to access a video based on its youtube_id.
+    This is the original method and remains unchanged for backward compatibility.
+    """
     message = None
     status = 200
     # Retrieve accessible videos for the user.
-    accessible_videos = get_all_videos_user_can_access(user_id)
-    if accessible_videos.get("status") != "success":
-        message = {"status": "failed", "reason": "failed to retrieve accessible videos"}
-        status = 403
+    # get_all_videos_user_can_access(user_id) needs to exist in db_api
+    accessible_videos_data = get_all_videos_user_can_access(user_id)
+    if accessible_videos_data.get("status") != "success":
+        message = {"status": "failed", "reason": "Failed to retrieve accessible videos for authentication"}
+        status = 500 # Internal error if data retrieval fails
     else:
         # Extract all accessible YouTube IDs from the user's playlists.
-        accessible_ids = set()
-        for playlist in accessible_videos.get("playlists", []):
+        accessible_youtube_ids = set()
+        for playlist in accessible_videos_data.get("playlists", []):
             for item in playlist.get("playlist_items", []):
-                ext_id = item.get("external_id")
+                ext_id = item.get("external_id") # external_id is the youtube_id
                 if ext_id:
-                    accessible_ids.add(ext_id)
+                    accessible_youtube_ids.add(ext_id)
 
         # Check if the requested youtube_id is among the accessible ones.
-        if youtube_id not in accessible_ids:
-            message = {"status": "failed", "reason": "user not authorized for this video"}
+        if youtube_id not in accessible_youtube_ids:
+            message = {"status": "failed", "reason": "User not authorized for this video"}
             status = 403
+
+    return message, status
+
+
+def check_authenticated_video_id(video_id_to_check, user_id):
+    """
+    Checks if a user is authorized to access a video based on its internal video_id.
+    """
+    message = None
+    status = 200
+
+    if not isinstance(video_id_to_check, int):
+        try:
+            video_id_to_check = int(video_id_to_check)
+        except ValueError:
+            return {"status": "failed", "reason": "Invalid video_id format"}, 400
+
+    accessible_videos_data = get_all_videos_user_can_access(user_id)
+    if accessible_videos_data.get("status") != "success":
+        message = {"status": "failed", "reason": "Failed to retrieve accessible videos for authentication"}
+        status = 500 # Internal error
+    else:
+        found_video = False
+        for playlist in accessible_videos_data.get("playlists", []):
+            for item in playlist.get("playlist_items", []):
+                # 'video_id' is the internal DB primary key for the Video table
+                if item.get("video_id") == video_id_to_check:
+                    found_video = True
+                    break
+            if found_video:
+                break
+
+        if not found_video:
+            message = {"status": "failed", "reason": "User not authorized for this video_id"}
+            status = 403
+
+    return message, status
+
+
+def check_authenticated_playlist_id(playlist_id_to_check, user_id):
+    """
+    Checks if a user is authorized to access a playlist based on its playlist_id.
+    A user is authorized if they own the playlist, are subscribed to a non-private playlist,
+    or if the playlist is public.
+    """
+    message = None
+    status = 200
+
+    if not isinstance(playlist_id_to_check, int):
+        try:
+            playlist_id_to_check = int(playlist_id_to_check)
+        except ValueError:
+            return {"status": "failed", "reason": "Invalid playlist_id format"}, 400
+
+
+    # get_all_videos_user_can_access already filters playlists based on user access
+    # (own, subscribed to public/shared, or public playlists)
+    accessible_videos_data = get_all_videos_user_can_access(user_id)
+
+    if accessible_videos_data.get("status") != "success":
+        message = {"status": "failed", "reason": "Failed to retrieve accessible playlists for authentication"}
+        status = 500 # Internal error
+    else:
+        found_playlist = False
+        for playlist in accessible_videos_data.get("playlists", []):
+            # 'playlist_id' is the internal DB primary key for the Playlist table
+            if playlist.get("playlist_id") == playlist_id_to_check:
+                found_playlist = True
+                break
+
+        if not found_playlist:
+            message = {"status": "failed", "reason": "User not authorized for this playlist_id or playlist does not exist"}
+            status = 403 # Or 404 if we want to distinguish not found from not authorized
 
     return message, status
