@@ -2,7 +2,7 @@ import psycopg2.errors
 from datetime import datetime
 
 from db.DB import DB
-import group_item_management as gim  # For managing group items
+import db.group_item_management as gim  # For managing group items
 from db.video_management import get_accessible_videos
 
 
@@ -42,22 +42,21 @@ def _get_user_accessible_item_ids(user_id: int):
     return accessible_video_ids, accessible_playlist_ids, accessible_content.get("status") == "success"
 
 
-def _increment_group_next_item_order(group_id: int):
+def _increment_group_next_item_order(cursor, group_id: int):
     """
     Helper: Increments the next_item_order for a given group_id.
     Expects an active database cursor. Returns True if successful.
     """
     success = False
     try:
-        with DB.get_cursor() as cursor:
-            cursor.execute(
-                'UPDATE "Group" SET next_item_order = next_item_order + 1 WHERE group_id = %s',
-                (group_id,)
-            )
-            if cursor.rowcount == 1:
-                success = True
-            else:
-                print(f"TODO: Failed to increment next_item_order for group_id {group_id}, group might not exist.")
+        cursor.execute(
+            'UPDATE "Group" SET next_item_order = next_item_order + 1 WHERE group_id = %s',
+            (group_id,)
+        )
+        if cursor.rowcount == 1:
+            success = True
+        else:
+            print(f"TODO: Failed to increment next_item_order for group_id {group_id}, group might not exist.")
     except Exception as e:
         print(f"TODO: Error incrementing next_item_order for group {group_id}: {e}")
     return success
