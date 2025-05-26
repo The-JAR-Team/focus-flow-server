@@ -45,7 +45,7 @@ def get_or_generate_questions(youtube_id: str, lang: str = "Hebrew") -> Dict[str
                     "failed" (error occurred),
                     "blocked" (generation in progress or starting now)
     """
-    lock_key = f"{youtube_id}_{lang}"
+    lock_key = f"{youtube_id}_{lang}_questions"
     response_payload = {
         "questions": [],
         "status": "failed",  # Default to failed

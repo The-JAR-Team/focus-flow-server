@@ -2,57 +2,142 @@
 db_api.py
 
 This module acts as an aggregator for user, playlist, video, subscription,
-watch item, and question operations. All functions delegate to the corresponding
+watch item, question, and group operations. All functions delegate to the corresponding
 functions in user_management, playlists_management, video_management,
-subscription_management, watch_management, or question_management. Below each function,
-you'll find its expected input (arguments) and output (return values).
+subscription_management, watch_management, question_management, or group_management.
+Below each function, you'll find its expected input (arguments) and output (return values).
 """
 
-from db import user_management, playlists_management, video_management, subscription_management, watch_management, \
-    question_management, lock_management, transcript_manager, summary_management
+from db import (
+    user_management,
+    playlists_management,
+    video_management,
+    subscription_management,
+    watch_management,
+    question_management,
+    lock_management,
+    transcript_manager,
+    summary_management,
+    group_management # Added group_management
+)
 from db.video_management import get_accessible_videos
+import db.email_confirmation_management as ecm
 
+# ... (all your existing functions from login_user down to change_password remain unchanged) ...
+
+
+# --- Group Management Functions ---
+
+def create_group(data: dict, user_id: int):
+    """
+    Creates a new group for the given user.
+    Delegates to group_management.create_group.
+    Expects data: {"group_name": <string>, "description": <string (optional)>}
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.create_group(data, user_id)
+
+
+def update_group(data: dict, user_id: int):
+    """
+    Updates an existing group for the given user.
+    Delegates to group_management.update_group.
+    Expects data: {"old_group_name": <string>, "new_group_name": <string (optional)>, "new_description": <string (optional)>}
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.update_group(data, user_id)
+
+
+def get_group_names(user_id: int):
+    """
+    Retrieves all group names, descriptions, and timestamps for a given user.
+    Delegates to group_management.get_group_names.
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.get_group_names(user_id)
+
+
+def get_groups(user_id: int):
+    """
+    Retrieves all groups for a user, including all items (videos and playlists) within each group.
+    Delegates to group_management.get_groups.
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.get_groups(user_id)
+
+
+def get_group(user_id: int, group_name: str):
+    """
+    Retrieves a specific group for a user by name, including its items.
+    Delegates to group_management.get_group.
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.get_group(user_id, group_name)
+
+
+def insert_group_item(data: dict, user_id: int):
+    """
+    Inserts an item (video or playlist) into a user's group.
+    Delegates to group_management.insert_group_item.
+    Expects data: {"group_name": <string>, "item_type": <"video" or "playlist">, "item_id": <int>}
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.insert_group_item(data, user_id)
+
+
+def remove_group_item(data: dict, user_id: int):
+    """
+    Removes an item (video or playlist) from a user's group.
+    Delegates to group_management.remove_group_item.
+    Expects data: {"group_name": <string>, "item_type": <"video" or "playlist">, "item_id": <int>}
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.remove_group_item(data, user_id)
+
+
+def remove_group(data: dict, user_id: int):
+    """
+    Removes a group and all its items for a user.
+    Delegates to group_management.remove_group.
+    Expects data: {"group_name": <string>}
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.remove_group(data, user_id)
+
+
+def switch_group_item_placement(data: dict, user_id: int):
+    """
+    Switches the placement (item_order) of two items within a user's group.
+    Delegates to group_management.switch_group_item_placement.
+    Expects data: {
+        "group_name": <string>,
+        "item_type": <"video" or "playlist">,
+        "order1": <int>,
+        "order2": <int>
+    }
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return group_management.switch_group_item_placement(data, user_id)
+
+# --- Existing functions below this line ---
+# (Make sure the new functions are added before any final existing functions if order matters,
+# or simply at the end of the function definitions section)
 
 def login_user(data):
     """
-    Logs in a user by delegating to user_management.login_user.
-
-    Args:
-        data (dict): Must include:
-            {
-                "email": <str>,
-                "password": <str>
-            }
-
-    Returns:
-        tuple: (response_dict, http_status_code, session_id (str or 0), user_id (int or 0))
-          - response_dict (dict) has keys: "status" ("success" or "failed"), "reason" (<str>).
-          - http_status_code (int) e.g. 200 on success, 401 on failure.
-          - session_id (str or 0): The session ID if login succeeded; 0 if failed.
-          - user_id (int or 0): The user’s ID if login succeeded; 0 if failed.
+    Login function.
+    Expects: {"email": <string>, "password": <string>}
+    Returns a 3-tuple: (response_dict, http_status_code, session_id (str) or None)
     """
     return user_management.login_user(data)
 
 
 def register_user(data):
     """
-    Registers a new user by delegating to user_management.register_user.
-
-    Args:
-        data (dict): Must include:
-            {
-                "email": <str>,
-                "password": <str>,
-                "first name": <str>,
-                "last name": <str>,
-                "age": <int>
-            }
-
-    Returns:
-        tuple: (response_dict, http_status_code, session_id (str or 0))
-          - response_dict (dict) has keys: "status" ("success" or "failed"), "reason" (<str>).
-          - http_status_code (int) e.g. 200 on success, 401 on failure.
-          - session_id (str or 0): The new session ID if registration and auto-login succeeded; 0 otherwise.
+    Registers a new user and initiates sending a confirmation email.
+    The user account will be created as inactive.
+    Expects input data: {"email": <string>, "password": <string>, "first name": <string>, "last name": <string>, "age": <int - optional>}
+    Returns a 2-tuple: (response_dict, http_status_code)
     """
     return user_management.register_user(data)
 
@@ -86,6 +171,20 @@ def get_user(session_id):
           - status_code (int): 200 if valid, otherwise an error code (e.g., 401).
     """
     return user_management.get_user(session_id)
+
+
+def get_permission(user_id: int):
+    """
+    Retrieves the permission level for a given user_id.
+
+    Args:
+        user_id (int): The ID of the user.
+
+    Returns:
+        int or None: The permission level (integer) if the user is found,
+                     otherwise None. Returns None on database error.
+    """
+    return user_management.get_permission(user_id)
 
 
 def create_playlist(user_id, playlist_name, playlist_permission):
@@ -420,7 +519,7 @@ def logout_user(session_id):
     return user_management.logout_user(session_id)
 
 
-from db import subscription_management
+from db import subscription_management # This is a duplicate import, can be removed if playlists_management handles these
 
 
 def get_playlist_subscribers(owner_id, playlist_id):
@@ -442,6 +541,8 @@ def get_playlist_subscribers(owner_id, playlist_id):
           - On failure:
               { "status": "failed", "reason": <error message> }
     """
+    # Assuming playlists_management.get_playlist_subscribers is the correct one based on your existing code.
+    # If these were meant to be from subscription_management directly, change playlists_management to subscription_management
     return playlists_management.get_playlist_subscribers(owner_id, playlist_id)
 
 
@@ -464,6 +565,7 @@ def get_playlist_subscriber_count(owner_id, playlist_id):
           - On failure:
               { "status": "failed", "reason": <error message> }
     """
+    # Assuming playlists_management.get_playlist_subscriber_count is the correct one.
     return playlists_management.get_playlist_subscriber_count(owner_id, playlist_id)
 
 
@@ -619,3 +721,22 @@ def upsert_summary(youtube_id: str, language: str, summary_json: dict):
                                  Note: ON CONFLICT doesn't directly return this, so it's inferred.
     """
     return summary_management.upsert_summary(youtube_id, language, summary_json)
+
+
+def confirm_user_email(passcode_from_link: str):
+    """
+    Confirms a user's email based on the provided passcode.
+    Activates the user if the passcode is valid and not expired.
+    Uses UTC for all time comparisons.
+    Returns a tuple: (response_dict, http_status_code)
+    """
+    return ecm.confirm_user_email(passcode_from_link)
+
+
+def change_password(user_id: int, data: dict):
+    """
+    Changes the password for a given user_id.
+    Expects data: {"old_password": "<string>", "new_password": "<string>"}
+    Returns (response_dict, http_status_code).
+    """
+    return user_management.change_password(user_id, data)
