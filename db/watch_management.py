@@ -123,7 +123,19 @@ def get_watch_item(user_id, data):
             row = cur.fetchone()
 
             if row is None:
-                return {"status": "failed", "reason": "Watch item not found"}, 404
+                sql_insert_watch_item = """
+                                        INSERT INTO "Watch_Item" (user_id, youtube_id, next_ticket, next_sub_ticket, \
+                                                                  "current_time", last_updated)
+                                        VALUES (%s, %s, 1, 1, 0.0, NOW()) ON CONFLICT (user_id, youtube_id) DO \
+                                        UPDATE \
+                                            SET next_ticket = GREATEST("Watch_Item".next_ticket, 2), \
+                                            next_sub_ticket = GREATEST("Watch_Item".next_sub_ticket, 2) \
+                                        RETURNING watch_item_id, "current_time", last_updated \
+                                        """
+                cur.execute(sql_insert_watch_item, (user_id, youtube_id))
+                row = cur.fetchone()
+                if row is None:
+                    return {"status": "failed", "reason": "Watch item not found"}, 404
 
             watch_item_id, current_time, last_updated = row
             return {
