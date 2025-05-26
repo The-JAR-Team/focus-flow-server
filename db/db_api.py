@@ -18,7 +18,7 @@ from db import (
     lock_management,
     transcript_manager,
     summary_management,
-    group_management # Added group_management
+    group_management, ticket_management  # Added group_management
 )
 from db.video_management import get_accessible_videos
 import db.email_confirmation_management as ecm
@@ -740,3 +740,51 @@ def change_password(user_id: int, data: dict):
     Returns (response_dict, http_status_code).
     """
     return user_management.change_password(user_id, data)
+
+def get_tickets(session_id: str, youtube_id: str):
+    """
+    Retrieves the current ticket and sub_ticket for the given session_id and youtube_id
+    from the Watch_Ticket table.
+
+    Args:
+        session_id (str): The session identifier.
+        youtube_id (str): The YouTube video identifier.
+
+    Returns:
+        tuple: (ticket, sub_ticket) if found, otherwise (None, None).
+    """
+    return ticket_management.get_tickets(session_id, youtube_id)
+
+def set_next_sub_ticket(user_id: int, session_id: str, youtube_id: str):
+    """
+    Assigns the next sub_ticket for the given user_id/youtube_id pair using Watch_Item.
+    If no main ticket has been assigned yet to Watch_Ticket for this session,
+    it behaves like set_next_ticket to assign the first main_ticket and sub_ticket 1.
+
+    Args:
+        user_id (int): The user's identifier.
+        session_id (str): The session identifier.
+        youtube_id (str): The YouTube video identifier.
+
+    Returns:
+        dict: {"main_ticket": <int>, "sub_ticket": <int>} on success,
+              None on failure.
+    """
+    return ticket_management.set_next_sub_ticket(user_id, session_id, youtube_id)
+
+def set_next_ticket(user_id, session_id: str, youtube_id: str):
+    """
+    Assigns a new main ticket for the given user_id/youtube_id pair from Watch_Item.
+    The sub_ticket is reset to 1.
+    Updates Watch_Ticket for the given session_id.
+
+    Args:
+        user_id (int): The user's identifier.
+        session_id (str): The session identifier (for Watch_Ticket PK).
+        youtube_id (str): The YouTube video identifier.
+
+    Returns:
+        dict: {"main_ticket": <int>, "sub_ticket": <int>} on success,
+              None on failure.
+    """
+    return ticket_management.set_next_ticket(user_id, session_id, youtube_id)

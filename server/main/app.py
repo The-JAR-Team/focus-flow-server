@@ -3,6 +3,7 @@ import sys
 
 from server.main.health_check import health_check_bp
 from server.main.videos.group_handling import groups_bp
+from server.main.videos.ticket import tickets_bp
 
 # Insert project root directory into sys.path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
@@ -28,6 +29,7 @@ app.register_blueprint(videos_bp)
 app.register_blueprint(subscriptions_bp)
 app.register_blueprint(watch_items_bp)
 app.register_blueprint(health_check_bp)
+app.register_blueprint(tickets_bp)
 app.register_blueprint(groups_bp, url_prefix='/group')
 app.register_blueprint(debug_bp, url_prefix='/debug')
 
