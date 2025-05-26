@@ -3,7 +3,7 @@ import numpy as np
 from flask import Blueprint, request, jsonify
 from typing import Optional, Dict, Any
 
-from db.db_api import log_watch_item, get_watch_item, process_mediapipe_data, get_model_results_by_video
+from db.db_api import log_watch_item, get_watch_item, process_mediapipe_data, get_model_results_by_video, log_watch_batch_client_tickets
 from logic.RuleBasedModel import RuleBasedModel # Keep if 'basic' model is used
 from server.main.utils import get_authenticated_user, check_authenticated_video
 
@@ -14,6 +14,8 @@ from logic.model_test import (
         onnx_session_v1 as onnx_session_v1_loaded, # Session for V1 model
         onnx_session_v4 as onnx_session_v4_loaded  # Session for V4 model
     )
+from server.main.videos.ticket import ticket_route_authenticator
+
 MODEL_V1_LOADED = onnx_session_v1_loaded is not None
 MODEL_V4_LOADED = onnx_session_v4_loaded is not None
 watch_items_bp = Blueprint('watch_items', __name__)
@@ -233,3 +235,51 @@ def watch_get_results():
                     }
                     status_code = 200
     return jsonify(response_payload), status_code
+
+
+@watch_items_bp.route('/watch/log_watch_batch', methods=['POST'])
+@ticket_route_authenticator(min_permission_level=1)
+def log_watch_batch_route(user_id, session_id,
+                          common_youtube_id_from_decorator):  # Names must match what decorator passes
+    """
+    Logs a batch of watch data items with client-provided tickets.
+    The decorator handles user authentication, session_id retrieval,
+    and common_youtube_id extraction and validation.
+    """
+    response_data = {"status": "failed"}
+    status_code = 400  # Default to Bad Request for payload issues
+
+    data = request.get_json()
+    if not data:
+        # This case should ideally be caught by the decorator if it checks for data to get youtube_id,
+        # but as a safeguard or if decorator logic changes.
+        response_data["reason"] = "Invalid or missing JSON payload."
+        return jsonify(response_data), status_code
+
+    # Extract batch-level information from the validated top-level JSON
+    batch_current_time_video = data.get("batch_current_time_video")
+    common_model_name = data.get("model_name")  # Optional
+    items_data_array = data.get("items")
+
+    # Validate required batch-level fields
+    if not isinstance(batch_current_time_video, (int, float)):
+        response_data["reason"] = "Missing or invalid 'batch_current_time_video'."
+        return jsonify(response_data), status_code
+    if not isinstance(items_data_array, list):
+        response_data["reason"] = "Missing or invalid 'items' array in payload."
+        return jsonify(response_data), status_code
+
+    # common_youtube_id_from_decorator is the youtube_id extracted by the decorator
+    # from the top level of the JSON payload.
+
+    # Call the DB API function to process the batch
+    result_dict, result_status_code = log_watch_batch_client_tickets(
+        user_id=user_id,
+        session_id=session_id,
+        common_youtube_id=common_youtube_id_from_decorator,
+        batch_current_time_video=batch_current_time_video,
+        common_model_name=common_model_name,
+        items_data_array=items_data_array
+    )
+
+    return jsonify(result_dict), result_status_code

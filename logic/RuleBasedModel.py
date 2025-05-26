@@ -1,6 +1,8 @@
 from db.DB import DB
 import math
 
+from db.db_api import store_model_result
+
 
 def flatten_landmarks(landmarks, expected_frames=None):
     """
@@ -359,27 +361,3 @@ def check_movement(current_landmarks, prev_landmarks):
     except Exception as e:
         print(f"Error calculating movement: {e}")
         return 0.0
-
-
-def store_model_result(log_data_id, model_name, result):
-    """
-    Store the model result in the database.
-
-    Args:
-        log_data_id (int): ID of the log data entry.
-        model_name (str): Name of the model.
-        result (float): Attention score.
-    """
-    try:
-        with DB.get_cursor() as cur:
-            cur.execute(
-                '''INSERT INTO "Model_Result"
-                   (log_data_id, model, result)
-                   VALUES (%s, %s, %s)
-                   RETURNING model_result_id''',
-                (log_data_id, model_name, result)
-            )
-            model_result_id = cur.fetchone()[0]
-            print(f"Stored model result with ID: {model_result_id}")
-    except Exception as e:
-        print(f"Error storing model result: {e}")

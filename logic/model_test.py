@@ -5,7 +5,7 @@ import numpy as np
 import json  # For loading extraction_payload if it's a string
 from typing import Optional, List, Dict, Any, Tuple
 
-from logic.RuleBasedModel import store_model_result  # Assuming this is correctly importable
+from db.db_api import store_model_result
 
 # ================================================
 # === Configuration ===
