@@ -22,7 +22,7 @@ def set_next_ticket(user_id: int, session_id: str, youtube_id: str):
     """
     return_value = None
     assigned_main_ticket = None
-    assigned_sub_ticket = 1  # For a new main ticket instance, sub_ticket is 1
+    assigned_sub_ticket = None  # For a new main ticket instance, sub_ticket is 1
 
     if not all([user_id, session_id, youtube_id]):
         logger.error("set_next_ticket: user_id, session_id, and youtube_id are required.")
@@ -33,19 +33,17 @@ def set_next_ticket(user_id: int, session_id: str, youtube_id: str):
                 sql_update_watch_item = """
                                         UPDATE "Watch_Item"
                                         SET next_ticket     = next_ticket + 1,
-                                            next_sub_ticket = 2 -- Next sub_ticket for this Watch_Item will be 2
+                                            next_sub_ticket = next_sub_ticket + 1
                                         WHERE user_id = %s \
-                                          AND youtube_id = %s RETURNING next_ticket - 1; -- Returns the value of next_ticket *before* this increment \
+                                          AND youtube_id = %s RETURNING next_ticket - 1, next_sub_ticket - 1; -- Returns the value of next_ticket *before* this increment \
                                         """
                 cur.execute(sql_update_watch_item, (user_id, youtube_id))
                 row = cur.fetchone()
 
                 if row:
                     assigned_main_ticket = row[0]
+                    assigned_sub_ticket = row[1]
                 else:
-                    # Watch_Item not found for this user/video, so create it.
-                    # We are about to use main_ticket 1 for the current operation.
-                    # So, the *next* main_ticket for Watch_Item should be 2, and *next* sub_ticket should be 2.
                     logger.info(f"Watch_Item not found for user {user_id}, youtube {youtube_id}. Creating it.")
                     sql_insert_watch_item = """
                                             INSERT INTO "Watch_Item" (user_id, youtube_id, next_ticket, next_sub_ticket, \
@@ -57,6 +55,7 @@ def set_next_ticket(user_id: int, session_id: str, youtube_id: str):
                                             """
                     cur.execute(sql_insert_watch_item, (user_id, youtube_id))
                     assigned_main_ticket = 1  # We are assigning main_ticket 1 for this operation
+                    assigned_sub_ticket = 1  # Sub ticket starts at 1 for the new main ticket
 
                 # Proceed if assigned_main_ticket is determined
                 if assigned_main_ticket is not None:
