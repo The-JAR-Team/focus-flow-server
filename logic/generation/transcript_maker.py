@@ -37,7 +37,7 @@ def fetch_transcript_as_string(video_id: str) -> str:
     Priority order for languages: Hebrew (he/iw), English (en), any available language
     Only retries for network/proxy errors, not for missing transcript errors.
     """
-    max_attempts = 10
+    max_attempts = 1
     attempt = 0
     last_exception = None
     lock_key = f"{video_id}_Generic_Transcript"
@@ -52,10 +52,10 @@ def fetch_transcript_as_string(video_id: str) -> str:
 
                 load_dotenv()
                 ytt_api = YouTubeTranscriptApi(
-                    proxy_config=GenericProxyConfig(
-                        http_url=os.getenv("PROXY_HTTP"),
-                        https_url=os.getenv("PROXY_HTTPS"),
-                    )
+                    # proxy_config=GenericProxyConfig(
+                    #     http_url=os.getenv("PROXY_HTTP"),
+                    #     https_url=os.getenv("PROXY_HTTPS"),
+                    # )
                 )
 
                 # First, try to get available transcripts
@@ -66,7 +66,7 @@ def fetch_transcript_as_string(video_id: str) -> str:
                         try:
                             transcript_obj = transcript_list.find_transcript(['en', 'he', 'iw'])
                             lines = transcript_obj.fetch()
-                            print(f"Found Hebrew transcript for {video_id}")
+                            print(f"Found transcript for {video_id}")
                         except (NoTranscriptFound, CouldNotRetrieveTranscript):
                             try:
                                 available_languages = [t.language for t in transcript_list]
@@ -93,7 +93,7 @@ def fetch_transcript_as_string(video_id: str) -> str:
                         attempt += 1
                         if attempt >= max_attempts:
                             raise last_exception
-                        time.sleep(0.1 * (2 * attempt))
+                        time.sleep(0.01 * (0.2 * attempt))
 
                 for line in lines:
                     start_time = seconds_to_hhmmss(line.start)
