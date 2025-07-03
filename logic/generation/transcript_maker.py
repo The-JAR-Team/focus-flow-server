@@ -37,7 +37,7 @@ def fetch_transcript_as_string(video_id: str) -> str:
     Priority order for languages: Hebrew (he/iw), English (en), any available language
     Only retries for network/proxy errors, not for missing transcript errors.
     """
-    max_attempts = 1
+    max_attempts = 5
     attempt = 0
     last_exception = None
     lock_key = f"{video_id}_Generic_Transcript"
@@ -52,10 +52,10 @@ def fetch_transcript_as_string(video_id: str) -> str:
 
                 load_dotenv()
                 ytt_api = YouTubeTranscriptApi(
-                    # proxy_config=GenericProxyConfig(
-                    #     http_url=os.getenv("PROXY_HTTP"),
-                    #     https_url=os.getenv("PROXY_HTTPS"),
-                    # )
+                    proxy_config=GenericProxyConfig(
+                        http_url=os.getenv("PROXY_HTTP"),
+                        https_url=os.getenv("PROXY_HTTPS"),
+                    )
                 )
 
                 # First, try to get available transcripts
