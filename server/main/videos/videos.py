@@ -20,7 +20,7 @@ def upload():
     response_payload = {"status": "failed", "message": "Upload failed"}  # Default response
     status_code = 500  # Default status
 
-    auth_resp, user_id, auth_status = get_authenticated_user()
+    auth_resp, user_id, auth_status = get_authenticated_user(min_permission=1)
     if auth_resp is not None:
         return auth_resp, auth_status  # Return authentication error directly
 
@@ -78,7 +78,7 @@ def upload():
 
 @videos_bp.route('/videos/update', methods=['POST'])
 def update():
-    resp, user_id, status = get_authenticated_user()
+    resp, user_id, status = get_authenticated_user(min_permission=1)
     if resp is not None:
         return resp, status
 
@@ -91,7 +91,7 @@ def update():
 
 @videos_bp.route('/videos/remove_from_playlist', methods=['POST'])
 def remove_from_pl():
-    resp, user_id, status = get_authenticated_user()
+    resp, user_id, status = get_authenticated_user(min_permission=1)
     if resp is not None:
         return resp, status
 

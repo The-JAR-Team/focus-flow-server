@@ -18,7 +18,7 @@ def subscribe():
     The authenticated owner (retrieved via get_authenticated_user) is used to verify that
     the playlist is owned by them before subscribing the user.
     """
-    resp, owner_id, status = get_authenticated_user()
+    resp, owner_id, status = get_authenticated_user(min_permission=1)
     if resp is not None:
         return resp, status
 
@@ -40,7 +40,7 @@ def unsubscribe():
     The authenticated owner (retrieved via get_authenticated_user) is used to ensure that
     the subscription being removed belongs to a playlist owned by them.
     """
-    resp, owner_id, status = get_authenticated_user()
+    resp, owner_id, status = get_authenticated_user(min_permission=1)
     if resp is not None:
         return resp, status
 

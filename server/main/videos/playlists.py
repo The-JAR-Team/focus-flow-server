@@ -7,7 +7,7 @@ playlist_bp = Blueprint('playlist', __name__)
 
 @playlist_bp.route('/playlists', methods=['POST'])
 def create():
-    resp, user_id, status = get_authenticated_user()
+    resp, user_id, status = get_authenticated_user(min_permission=1)
     if resp is not None:
         return resp, status
 
@@ -24,7 +24,7 @@ def create():
 
 @playlist_bp.route('/playlists/<int:playlist_id>', methods=['DELETE'])
 def delete(playlist_id):
-    resp, user_id, status = get_authenticated_user()
+    resp, user_id, status = get_authenticated_user(min_permission=1)
     if resp is not None:
         return resp, status
 
@@ -44,7 +44,7 @@ def get_all():
 
 @playlist_bp.route('/playlists/<int:playlist_id>/permission', methods=['PUT'])
 def update_permission(playlist_id):
-    resp, user_id, status = get_authenticated_user()
+    resp, user_id, status = get_authenticated_user(min_permission=1)
     if resp is not None:
         return resp, status
 
@@ -59,7 +59,7 @@ def update_permission(playlist_id):
 
 @playlist_bp.route('/playlists/update_name', methods=['PUT'])
 def update_name():
-    resp, user_id, status = get_authenticated_user()
+    resp, user_id, status = get_authenticated_user(min_permission=1)
     if resp is not None:
         return resp, status
 

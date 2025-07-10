@@ -7,6 +7,7 @@ functions in user_management, playlists_management, video_management,
 subscription_management, watch_management, question_management, or group_management.
 Below each function, you'll find its expected input (arguments) and output (return values).
 """
+from typing import Optional
 
 from db import (
     user_management,
@@ -18,7 +19,7 @@ from db import (
     lock_management,
     transcript_manager,
     summary_management,
-    group_management # Added group_management
+    group_management, ticket_management  # Added group_management
 )
 from db.video_management import get_accessible_videos
 import db.email_confirmation_management as ecm
@@ -740,3 +741,100 @@ def change_password(user_id: int, data: dict):
     Returns (response_dict, http_status_code).
     """
     return user_management.change_password(user_id, data)
+
+def get_tickets(session_id: str, youtube_id: str):
+    """
+    Retrieves the current ticket and sub_ticket for the given session_id and youtube_id
+    from the Watch_Ticket table.
+
+    Args:
+        session_id (str): The session identifier.
+        youtube_id (str): The YouTube video identifier.
+
+    Returns:
+        tuple: (ticket, sub_ticket) if found, otherwise (None, None).
+    """
+    return ticket_management.get_tickets(session_id, youtube_id)
+
+def set_next_sub_ticket(user_id: int, session_id: str, youtube_id: str):
+    """
+    Assigns the next sub_ticket for the given user_id/youtube_id pair using Watch_Item.
+    If no main ticket has been assigned yet to Watch_Ticket for this session,
+    it behaves like set_next_ticket to assign the first main_ticket and sub_ticket 1.
+
+    Args:
+        user_id (int): The user's identifier.
+        session_id (str): The session identifier.
+        youtube_id (str): The YouTube video identifier.
+
+    Returns:
+        dict: {"main_ticket": <int>, "sub_ticket": <int>} on success,
+              None on failure.
+    """
+    return ticket_management.set_next_sub_ticket(user_id, session_id, youtube_id)
+
+def set_next_ticket(user_id, session_id: str, youtube_id: str):
+    """
+    Assigns a new main ticket for the given user_id/youtube_id pair from Watch_Item.
+    The sub_ticket is reset to 1.
+    Updates Watch_Ticket for the given session_id.
+
+    Args:
+        user_id (int): The user's identifier.
+        session_id (str): The session identifier (for Watch_Ticket PK).
+        youtube_id (str): The YouTube video identifier.
+
+    Returns:
+        dict: {"main_ticket": <int>, "sub_ticket": <int>} on success,
+              None on failure.
+    """
+    return ticket_management.set_next_ticket(user_id, session_id, youtube_id)
+
+
+def store_model_result(log_data_id, model_name, result):
+    """
+    Store the model result in the database.
+
+    Args:
+        log_data_id (int): ID of the log data entry.
+        model_name (str): Name of the model.
+        result (float): Attention score.
+    """
+    return watch_management.store_model_result(log_data_id, model_name, result)
+
+
+def log_watch_batch_client_tickets(user_id: int, session_id: str, common_youtube_id: str,
+                                   batch_current_time_video: float, common_model_name: Optional[str],
+                                   items_data_array: list):
+    """
+    Logs a batch of watch data items. A single main_ticket and sub_ticket pair,
+    determined by the server for the given session_id and common_youtube_id,
+    is used for all items in this batch.
+    The server calls ticket_management.get_tickets() or ticket_management.set_next_ticket()
+    once at the beginning of the batch processing.
+
+    Args:
+        user_id (int): The ID of the authenticated user.
+        session_id (str): The current session ID.
+        common_youtube_id (str): The YouTube ID common to all items in the batch.
+        batch_current_time_video (float): The video timestamp when the batch was sent.
+        common_model_name (str, optional): The model name common to all items if results are present.
+        items_data_array (list): A list of dictionaries, each representing a watch data item.
+            Client no longer sends main_ticket or sub_ticket per item.
+            Each item must contain:
+                "item_current_time_video": float
+                "extraction_type": str
+                "interval_seconds": float
+                "fps_at_extraction": int
+            Optional fields in each item's "payload_details":
+                "extracted_time_utc": str (ISO 8601 format, e.g., "2023-10-26T10:30:00Z")
+                "client_processing_duration_ms": int
+            Optional field in item:
+                "model_result": float (if common_model_name is provided)
+    Returns:
+        tuple: (response_dict, http_status_code)
+    """
+    return watch_management.log_watch_batch_client_tickets(
+        user_id, session_id, common_youtube_id, batch_current_time_video,
+        common_model_name, items_data_array
+    )
