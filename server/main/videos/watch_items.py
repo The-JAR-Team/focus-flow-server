@@ -35,7 +35,7 @@ def watch_get_results():
     response_payload = {"status": "failed"}
     status_code = 500
 
-    auth_resp, user_id, auth_status = get_authenticated_user()
+    auth_resp, user_id, auth_status = get_authenticated_user(min_permission=1)
     if auth_resp is not None:
         response_payload = auth_resp
         status_code = auth_status
