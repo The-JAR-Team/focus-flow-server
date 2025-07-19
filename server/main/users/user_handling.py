@@ -41,11 +41,13 @@ def login():
         resp = jsonify(response)
         # Set the session_id cookie
         resp.set_cookie(
-            'session_id',
+            "session_id",
             session_id,
             httponly=True,
             secure=True,
-            samesite='none',
+            samesite="None",   # must be capital “N”
+            max_age=24 * 60 * 60,
+            path="/"
         )
         return resp, status
     else:
