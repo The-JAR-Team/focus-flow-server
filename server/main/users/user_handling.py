@@ -13,7 +13,8 @@ load_dotenv()
 @auth_bp.route('/login', methods=['POST'])
 def login():
     """
-    Handles user login, creates a session, and sets a session cookie.
+    Handles user login, creates a session, sets a session cookie,
+    and includes the session_id in the response body.
     Optionally checks for a minimum permission level.
     """
     data = request.get_json()
@@ -29,7 +30,6 @@ def login():
     response, status, session_id = login_user(data)
 
     if status == 200:
-        # Login successful, now check permission if required
         user_id = get_user(session_id)[0]
         if min_permission > 0:
             user_permission = get_permission(user_id)
@@ -37,7 +37,6 @@ def login():
                 print(f"Login denied for user_id {user_id}: insufficient permission (required: {min_permission}, has: {user_permission})")
                 return jsonify({"status": "failed", "reason": "Insufficient permissions"}), 403 # Forbidden
 
-        # Permission check passed (or not required)
         resp = jsonify(response)
         # Set the session_id cookie
         resp.set_cookie(
@@ -45,7 +44,8 @@ def login():
             session_id,
             httponly=True,
             secure=True,
-            samesite="None",   # must be capital “N”
+            samesite="None",
+            partitioned=True,
             max_age=24 * 60 * 60,
             path="/"
         )
