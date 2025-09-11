@@ -38,7 +38,7 @@ app.register_blueprint(groups_bp, url_prefix='/api/group')
 app.register_blueprint(debug_bp, url_prefix='/api/debug')
 
 # Health checks are often kept at the root for simplicity, so we leave it here.
-app.register_blueprint(health_check_bp)
+app.register_blueprint(health_check_bp, url_prefix='/api')
 
 
 if __name__ == '__main__':
