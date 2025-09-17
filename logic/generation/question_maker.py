@@ -117,7 +117,7 @@ def get_or_generate_questions(youtube_id: str, lang: str = "Hebrew") -> Dict[str
 
 
 # --- Private Generation Function ---
-def _generate_and_store_questions(youtube_id: str, lang="Hebrew", chunk_duration=1200, max_retries=15):
+def _generate_and_store_questions(youtube_id: str, lang="Hebrew", chunk_duration=2700, max_retries=15):
     """
     Internal: Fetches, splits, generates questions via threads, stores in DB.
     Returns dict: {"questions": list, "error": str_or_none}
