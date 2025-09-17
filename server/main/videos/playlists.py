@@ -70,18 +70,6 @@ def update_name():
 
 @playlist_bp.route('/playlists/<int:playlist_id>/subscribers', methods=['GET'])
 def get_subscribers(playlist_id):
-    """
-    GET /playlists/<playlist_id>/subscribers
-
-    Returns a JSON object listing the emails of all subscribers to this playlist,
-    only if the current user owns the playlist.
-
-    Example Response (on success):
-    {
-      "status": "success",
-      "subscribers": ["user1@example.com", "user2@example.com"]
-    }
-    """
     resp, user_id, status = get_authenticated_user()
     if resp is not None:
         return resp, status
@@ -92,21 +80,29 @@ def get_subscribers(playlist_id):
 
 @playlist_bp.route('/playlists/<int:playlist_id>/subscriber_count', methods=['GET'])
 def get_subscriber_count(playlist_id):
-    """
-    GET /playlists/<playlist_id>/subscriber_count
-
-    Returns a JSON object with the count of subscribers for this playlist,
-    only if the current user owns the playlist.
-
-    Example Response (on success):
-    {
-      "status": "success",
-      "count": 5
-    }
-    """
     resp, user_id, status = get_authenticated_user()
     if resp is not None:
         return resp, status
 
     response_data, code = get_playlist_subscriber_count(user_id, playlist_id)
     return jsonify(response_data), code
+
+
+@playlist_bp.route('/playlists/item/<int:playlist_item_id>/order', methods=['PUT'])
+def update_order(playlist_item_id):
+    """
+    Updates the order of a specific playlist item.
+    Expects a JSON payload: {"new_order": <integer>}
+    """
+    resp, user_id, status = get_authenticated_user(min_permission=1)
+    if resp is not None:
+        return resp, status
+
+    data = request.get_json()
+    new_order = data.get("new_order")
+
+    if new_order is None:
+        return jsonify({"status": "failed", "reason": "missing new_order"}), 400
+
+    response, status = update_playlist_item_order(user_id, playlist_item_id, new_order)
+    return jsonify(response), status

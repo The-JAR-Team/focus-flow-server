@@ -28,7 +28,6 @@ import db.email_confirmation_management as ecm
 
 
 # --- Group Management Functions ---
-
 def create_group(data: dict, user_id: int):
     """
     Creates a new group for the given user.
@@ -838,3 +837,11 @@ def log_watch_batch_client_tickets(user_id: int, session_id: str, common_youtube
         user_id, session_id, common_youtube_id, batch_current_time_video,
         common_model_name, items_data_array
     )
+
+
+def update_playlist_item_order(user_id, playlist_item_id, new_order):
+    """
+    Updates the order of a specific item in a playlist, ensuring no two items
+    have the same order by shifting subsequent items.
+    """
+    return playlists_management.update_playlist_item_order(user_id, playlist_item_id, new_order)

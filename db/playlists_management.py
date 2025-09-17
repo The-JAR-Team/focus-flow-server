@@ -10,19 +10,9 @@ def create_playlist(user_id, playlist_name, playlist_permission='unlisted'):
     """
     Creates a new playlist for the given user if one with the same name doesn't already exist.
     The playlist will have a default permission of 'unlisted'.
-
-    Parameters:
-      user_id (int): The ID of the user.
-      playlist_name (str): The name of the playlist.
-
-    Returns:
-      tuple: (response_dict, http_status_code)
-        On success: {"status": "success", "playlist_id": <new_playlist_id>}
-        On failure: {"status": "failed", "reason": "<explanation>"}
     """
     try:
         with DB.get_cursor() as cur:
-            # Check if a playlist with the given name already exists for this user.
             cur.execute(
                 'SELECT playlist_id FROM "Playlist" WHERE user_id = %s AND playlist_name = %s',
                 (user_id, playlist_name)
@@ -30,9 +20,9 @@ def create_playlist(user_id, playlist_name, playlist_permission='unlisted'):
             if cur.fetchone():
                 return {"status": "failed", "reason": "Playlist with that name already exists"}, 400
 
-            # Insert the new playlist; permission defaults to 'unlisted'.
+            # Insert the new playlist, initializing next_item_order to 1.
             cur.execute(
-                'INSERT INTO "Playlist" (user_id, playlist_name, permission) VALUES (%s, %s, %s) RETURNING playlist_id',
+                'INSERT INTO "Playlist" (user_id, playlist_name, permission, next_item_order) VALUES (%s, %s, %s, 1) RETURNING playlist_id',
                 (user_id, playlist_name, playlist_permission)
             )
             new_playlist_id = cur.fetchone()[0]
@@ -45,19 +35,9 @@ def create_playlist(user_id, playlist_name, playlist_permission='unlisted'):
 def delete_playlist(user_id, playlist_id):
     """
     Deletes a playlist for the given user.
-
-    Parameters:
-      user_id (int): The ID of the user.
-      playlist_id (int): The ID of the playlist to delete.
-
-    Returns:
-      tuple: (response_dict, http_status_code)
-        On success: {"status": "success", "reason": "Playlist deleted"}
-        On failure: {"status": "failed", "reason": "<explanation>"}
     """
     try:
         with DB.get_cursor() as cur:
-            # Ensure the playlist exists and belongs to the user.
             cur.execute(
                 'SELECT playlist_id FROM "Playlist" WHERE playlist_id = %s AND user_id = %s',
                 (playlist_id, user_id)
@@ -65,7 +45,6 @@ def delete_playlist(user_id, playlist_id):
             if cur.fetchone() is None:
                 return {"status": "failed", "reason": "Playlist not found"}, 404
 
-            # Delete the playlist.
             cur.execute(
                 'DELETE FROM "Playlist" WHERE playlist_id = %s AND user_id = %s',
                 (playlist_id, user_id)
@@ -79,14 +58,6 @@ def delete_playlist(user_id, playlist_id):
 def get_all_user_playlists(user_id):
     """
     Retrieves all playlists for a given user.
-
-    Parameters:
-      user_id (int): The ID of the user.
-
-    Returns:
-      tuple: (response_dict, http_status_code)
-        On success: {"status": "success", "playlists": [ { "playlist_id": <id>, "playlist_name": <name>, "permission": <permission> }, ... ]}
-        On failure: {"status": "failed", "reason": "<explanation>"}
     """
     try:
         with DB.get_cursor() as cur:
@@ -108,20 +79,9 @@ def get_all_user_playlists(user_id):
 def update_playlist_permission(user_id, playlist_id, new_permission):
     """
     Updates the permission of a playlist belonging to a user.
-
-    Parameters:
-      user_id (int): The ID of the user.
-      playlist_id (int): The ID of the playlist to update.
-      new_permission (str): The new permission value ("public", "unlisted", or "private").
-
-    Returns:
-      tuple: (response_dict, http_status_code)
-        On success: {"status": "success", "reason": "Permission updated"}
-        On failure: {"status": "failed", "reason": "<explanation>"}
     """
     try:
         with DB.get_cursor() as cur:
-            # Ensure the playlist belongs to the user.
             cur.execute(
                 'SELECT playlist_id FROM "Playlist" WHERE playlist_id = %s AND user_id = %s',
                 (playlist_id, user_id)
@@ -129,7 +89,6 @@ def update_playlist_permission(user_id, playlist_id, new_permission):
             if cur.fetchone() is None:
                 return {"status": "failed", "reason": "Playlist not found or not owned by user"}, 404
 
-            # Update the permission.
             cur.execute(
                 'UPDATE "Playlist" SET permission = %s WHERE playlist_id = %s AND user_id = %s',
                 (new_permission, playlist_id, user_id)
@@ -142,18 +101,17 @@ def update_playlist_permission(user_id, playlist_id, new_permission):
 
 def remove_from_playlist(user_id, data):
     """
-    Removes a playlist item using the DB context manager.
+    Removes a playlist item and re-orders the remaining items.
     """
     playlist_item_id = data.get("playlist_item_id")
     if not playlist_item_id:
         return {"status": "failed", "reason": "missing playlist_item_id"}, 400
 
     try:
-        # Use the context manager
         with DB.get_cursor() as cur:
-            # Verify the playlist item belongs to a playlist owned by the user.
+            # Get item details and verify ownership.
             cur.execute("""
-                SELECT p.user_id
+                SELECT pi.playlist_id, pi.item_order, p.user_id
                 FROM "Playlist_Item" pi
                 JOIN "Playlist" p ON pi.playlist_id = p.playlist_id
                 WHERE pi.playlist_item_id = %s
@@ -161,28 +119,36 @@ def remove_from_playlist(user_id, data):
             result = cur.fetchone()
 
             if result is None:
-                # No DB change, context manager handles connection return
-                return {"status": "failed", "reason": "playlist item not found"}, 404 # Changed to 404 Not Found
+                return {"status": "failed", "reason": "playlist item not found"}, 404
 
-            owner_user_id = result[0]
+            playlist_id, item_order, owner_user_id = result
             if owner_user_id != user_id:
-                 # No DB change, context manager handles connection return
-                return {"status": "failed", "reason": "not authorized to remove this playlist item"}, 403 # Changed to 403 Forbidden
+                return {"status": "failed", "reason": "not authorized to remove this playlist item"}, 403
 
-            # Delete the playlist item.
+            # Delete the specified playlist item.
             cur.execute("""
                 DELETE FROM "Playlist_Item"
                 WHERE playlist_item_id = %s
             """, (playlist_item_id,))
-            # Commit is handled automatically by the context manager on successful exit
 
-        # Return success outside the 'with' block
-        return {"status": "success", "reason": "", "removed_playlist_item_id": playlist_item_id}, 200
+            # Re-order the remaining items in the playlist to fill the gap.
+            cur.execute("""
+                UPDATE "Playlist_Item"
+                SET item_order = item_order - 1
+                WHERE playlist_id = %s AND item_order > %s
+            """, (playlist_id, item_order))
+
+            # Decrement the next_item_order counter for the playlist.
+            cur.execute("""
+                UPDATE "Playlist"
+                SET next_item_order = next_item_order - 1
+                WHERE playlist_id = %s
+            """, (playlist_id,))
+
+        return {"status": "success", "reason": "Item removed and playlist re-ordered", "removed_playlist_item_id": playlist_item_id}, 200
 
     except Exception as e:
         logger.error(f"Failed to remove playlist item {playlist_item_id} for user {user_id}: {e}", exc_info=True)
-        # Rollback is handled automatically by the context manager on exception
-        # Return a generic server error
         return {"status": "failed", "reason": "failed to remove playlist item"}, 500
 
 
@@ -197,16 +163,13 @@ def update_playlist_name(user_id, data):
         return {"status": "failed", "reason": "Missing old_name or new_name"}, 400
 
     try:
-         # Use the context manager
         with DB.get_cursor() as cur:
-            # Check if new name already exists for this user (optional but good practice)
             cur.execute("""
                 SELECT 1 FROM "Playlist" WHERE playlist_name = %s AND user_id = %s LIMIT 1
             """, (new_name, user_id))
             if cur.fetchone():
-                 return {"status": "failed", "reason": f"Playlist with name '{new_name}' already exists"}, 400
+                return {"status": "failed", "reason": f"Playlist with name '{new_name}' already exists"}, 400
 
-            # Find the playlist by old name
             cur.execute("""
                 SELECT playlist_id FROM "Playlist"
                 WHERE playlist_name = %s AND user_id = %s
@@ -215,36 +178,30 @@ def update_playlist_name(user_id, data):
             result = cur.fetchone()
 
             if result is None:
-                 # No DB change, context manager handles connection return
                 return {"status": "failed", "reason": f"Playlist with name '{old_name}' not found"}, 404
 
             playlist_id = result[0]
 
-            # Update the playlist name.
             cur.execute("""
                 UPDATE "Playlist"
                 SET playlist_name = %s
                 WHERE playlist_id = %s
             """, (new_name, playlist_id))
-            # Commit is handled automatically by context manager on successful exit
 
-        # Return success outside 'with' block
         return {"status": "success", "reason": "Playlist name updated", "playlist_id": playlist_id}, 200
 
     except Exception as e:
         logger.error(f"Failed to update playlist name from '{old_name}' for user {user_id}: {e}", exc_info=True)
-         # Rollback is handled automatically by context manager on exception
         return {"status": "failed", "reason": "failed to update playlist name"}, 500
 
 
 def get_playlist_subscribers(owner_id, playlist_id):
     """
     Retrieves subscriber details (email, full name) for a playlist,
-    verifying ownership first. (Already compatible, minor logging added).
+    verifying ownership first.
     """
     try:
         with DB.get_cursor() as cur:
-            # Verify ownership
             cur.execute('SELECT user_id FROM "Playlist" WHERE playlist_id = %s', (playlist_id,))
             row = cur.fetchone()
             if row is None:
@@ -253,7 +210,6 @@ def get_playlist_subscribers(owner_id, playlist_id):
             if row[0] != owner_id:
                 return {"status": "failed", "reason": "Not authorized"}, 403
 
-            # Retrieve subscribers
             cur.execute(
                 '''
                 SELECT u.email, u.first_name, u.last_name
@@ -264,7 +220,6 @@ def get_playlist_subscribers(owner_id, playlist_id):
                 (playlist_id,)
             )
             rows = cur.fetchall()
-            # No commit/rollback needed for SELECT
             subscribers = [
                 {
                     "email": r[0],
@@ -274,7 +229,7 @@ def get_playlist_subscribers(owner_id, playlist_id):
             ]
         return {"status": "success", "subscribers": subscribers}, 200
 
-    except Exception as e: # Catch any other errors
+    except Exception as e:
         logger.error(f"Error getting subscribers for playlist {playlist_id}, owner {owner_id}: {e}", exc_info=True)
         return {"status": "failed", "reason": "failed to get subscribers"}, 500
 
@@ -283,24 +238,9 @@ def get_playlist_subscriber_count(owner_id, playlist_id):
     """
     Returns the number of subscribers for a given playlist_id,
     only if the playlist is owned by owner_id.
-
-    Args:
-        owner_id (int): The user who owns the playlist.
-        playlist_id (int): The playlist ID.
-
-    Returns:
-        tuple: (response_dict, http_status_code)
-            - On success:
-                {
-                  "status": "success",
-                  "count": <number_of_subscribers>
-                }
-            - On failure:
-                { "status": "failed", "reason": <error message> }
     """
     try:
         with DB.get_cursor() as cur:
-            # Verify ownership
             cur.execute('SELECT user_id FROM "Playlist" WHERE playlist_id = %s', (playlist_id,))
             row = cur.fetchone()
             if row is None:
@@ -310,7 +250,6 @@ def get_playlist_subscriber_count(owner_id, playlist_id):
             if playlist_owner != owner_id:
                 return {"status": "failed", "reason": "Not authorized to view subscriber for this playlist"}, 403
 
-            # Count the subscribers
             cur.execute(
                 '''
                 SELECT COUNT(*)
@@ -325,3 +264,71 @@ def get_playlist_subscriber_count(owner_id, playlist_id):
     except Exception as e:
         print("Error in get_playlist_subscriber_count:", e)
         return {"status": "failed", "reason": str(e)}, 500
+
+
+def update_playlist_item_order(user_id, playlist_item_id, new_order):
+    """
+    Updates the order of a specific item in a playlist, ensuring no two items
+    have the same order by shifting subsequent items.
+    """
+    if not isinstance(new_order, int) or new_order <= 0:
+        return {"status": "failed", "reason": "new_order must be a positive integer"}, 400
+
+    try:
+        with DB.get_cursor() as cur:
+            # 1. Get current item details, playlist_id, and verify ownership in one go.
+            cur.execute("""
+                SELECT
+                    pi.playlist_id,
+                    pi.item_order,
+                    p.user_id,
+                    (SELECT MAX(item_order) FROM "Playlist_Item" WHERE playlist_id = p.playlist_id) as max_order
+                FROM "Playlist_Item" pi
+                JOIN "Playlist" p ON pi.playlist_id = p.playlist_id
+                WHERE pi.playlist_item_id = %s
+            """, (playlist_item_id,))
+            result = cur.fetchone()
+
+            if result is None:
+                return {"status": "failed", "reason": "Playlist item not found"}, 404
+
+            playlist_id, old_order, owner_id, max_order = result
+
+            if owner_id != user_id:
+                return {"status": "failed", "reason": "Not authorized to update this item"}, 403
+
+            # 2. Validate new_order against the max order.
+            if new_order > max_order:
+                return {"status": "failed", "reason": f"new_order ({new_order}) cannot be greater than the max order ({max_order})"}, 400
+
+            if new_order == old_order:
+                return {"status": "success", "reason": "Item is already at the requested order"}, 200
+
+            # 3. Perform the reordering within the transaction.
+            if new_order > old_order:
+                # Item is moving DOWN the list. Shift items between old and new UP.
+                cur.execute("""
+                    UPDATE "Playlist_Item"
+                    SET item_order = item_order - 1
+                    WHERE playlist_id = %s AND item_order > %s AND item_order <= %s
+                """, (playlist_id, old_order, new_order))
+            else:  # new_order < old_order
+                # Item is moving UP the list. Shift items between new and old DOWN.
+                cur.execute("""
+                    UPDATE "Playlist_Item"
+                    SET item_order = item_order + 1
+                    WHERE playlist_id = %s AND item_order >= %s AND item_order < %s
+                """, (playlist_id, new_order, old_order))
+
+            # 4. Place the moved item into its new, now-vacant position.
+            cur.execute("""
+                UPDATE "Playlist_Item"
+                SET item_order = %s
+                WHERE playlist_item_id = %s
+            """, (new_order, playlist_item_id))
+
+        return {"status": "success", "reason": "Item order updated successfully"}, 200
+    except Exception as e:
+        logger.error(f"Failed to update order for playlist item {playlist_item_id}: {e}", exc_info=True)
+        return {"status": "failed", "reason": "Failed to update item order"}, 500
+
