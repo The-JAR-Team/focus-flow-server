@@ -9,7 +9,7 @@ from google import genai
 from google.genai import types
 
 # Model configuration
-DEFAULT_MODEL = "gemini-2.5-flash-preview-05-20"
+DEFAULT_MODEL = "gemini-2.5-flash"
 logger = logging.getLogger(__name__)
 
 
